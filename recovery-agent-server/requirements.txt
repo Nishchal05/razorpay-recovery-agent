@@ -1,0 +1,13 @@
+fastapi
+uvicorn
+langchain
+langchain_google_genai
+python-dotenv
+langchain-community
+langgraph
+langchain-huggingface
+sqlalchemy
+psycopg
+pgvector
+prisma
+apscheduler

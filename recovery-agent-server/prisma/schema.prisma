@@ -1,0 +1,75 @@
+generator client {
+  provider        = "prisma-client-py"
+  interface       = "asyncio"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url        = env("DATABASE_URL")
+  extensions = [vector]
+}
+
+
+enum InvoiceStatus {
+  PENDING
+  DISPUTE
+  PAID
+}
+
+
+enum MessageType {
+  RECEIVED
+  SENT
+}
+
+
+model Company {
+  company_id      Int       @id @default(autoincrement())
+  company_name    String    @unique
+  company_address String
+  company_phone   String    @unique
+  company_email   String    @unique
+
+  invoices        Invoice[]
+
+  created_at      DateTime  @default(now())
+  updated_at      DateTime  @updatedAt
+}
+
+
+model Invoice {
+  invoice_id           Int           @id @default(autoincrement())
+  invoice_name         String
+  invoice_due_date     DateTime
+  invoice_amount       Float
+  invoice_amount_status Boolean      @default(false)
+  invoice_status       InvoiceStatus @default(PENDING)
+
+  company_id           Int
+  company              Company       @relation(fields: [company_id], references: [company_id])
+
+  messages             Message[]
+
+  created_at           DateTime      @default(now())
+  updated_at           DateTime      @updatedAt
+
+  @@index([company_id])
+  @@index([invoice_due_date])
+  @@index([invoice_status])
+}
+
+
+model Message {
+  message_id    Int         @id @default(autoincrement())
+
+  content       String
+  message_type  MessageType
+  embedding     Unsupported("vector(1536)")
+  invoice_id    Int
+  invoice       Invoice     @relation(fields: [invoice_id], references: [invoice_id], onDelete: Cascade)
+
+  created_at    DateTime    @default(now())
+
+  @@index([invoice_id])
+}
