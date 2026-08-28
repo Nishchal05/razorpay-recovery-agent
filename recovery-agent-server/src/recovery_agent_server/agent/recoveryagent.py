@@ -1,4 +1,5 @@
-from typing import TypedDict
+
+from typing import Any, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -38,14 +39,15 @@ class RecoveryDecision(BaseModel):
 class RecoveryState(TypedDict):
     invoice_id: int
     invoice: dict
+
     conversation: str
+    history: dict[str, Any]
 
     send_message: bool
     create_payment_link: bool
     human_intervention: bool
 
     reason: str
-
     payment_link: str
 
 
@@ -59,7 +61,7 @@ llm = ChatGoogleGenerativeAI(
 
 
 # ============================================================
-# 4. AGENT
+# 4. AI AGENT
 # ============================================================
 
 agent = create_agent(
@@ -69,8 +71,12 @@ agent = create_agent(
     prompt="""
 You are an AI B2B receivables recovery assistant.
 
-Your job is to analyze an overdue invoice and the customer's
-previous communication.
+Your job is to analyze an overdue invoice using:
+
+1. Current invoice information
+2. Previous customer communication
+3. Company payment history
+4. Customer communication behavior
 
 Never invent information.
 
@@ -78,40 +84,44 @@ Analyze:
 
 1. Customer intent
 2. Previous payment promises
-3. Whether a payment promise has failed
+3. Whether a previous promise appears to have failed
 4. Whether the customer is disputing the invoice
 5. Whether another reminder is appropriate
-6. Whether a payment link would be useful
+6. Whether a Razorpay payment link would be useful
 7. Whether human intervention is required
 
-IMPORTANT STOPPING RULES:
+IMPORTANT RULES:
 
 - Never send more than 3 automated reminders.
-- If the customer disputes the invoice, stop automation
-  and require human intervention.
+- If the customer disputes the invoice, require human intervention.
 - If the customer has already made a payment promise,
   consider that before sending another reminder.
-- If a payment promise has failed, carefully evaluate the
-  situation.
+- If a previous payment promise appears to have failed,
+  carefully evaluate the situation.
 - If the situation is unclear, require human intervention.
 - Never invent payment dates, discounts, customer statements,
-  or invoice information.
+  payment information, or invoice information.
 
-Decision rules:
+DECISION RULES:
 
 - send_message = true only when an automated WhatsApp message
   is appropriate.
+
 - create_payment_link = true only when a payment link should
   be provided to the customer.
-- human_intervention = true when the case requires a human.
 
-Return your decision using the provided structured format.
+- human_intervention = true when the situation requires
+  human review.
+
+- If human_intervention is true, do not recommend automation.
+
+Return the decision using the provided structured format.
 """
 )
 
 
 # ============================================================
-# 5. NODE: GET CONTEXT
+# 5. NODE: GET CONVERSATION CONTEXT
 # ============================================================
 
 async def get_context(state: RecoveryState):
@@ -126,7 +136,7 @@ async def get_context(state: RecoveryState):
     )
 
     conversation = "\n".join(
-        f"{message.message_type}: {message.message}"
+        f"{message.message_type}: {message.content}"
         for message in messages
     )
 
@@ -136,7 +146,29 @@ async def get_context(state: RecoveryState):
 
 
 # ============================================================
-# 6. NODE: AI DECISION
+# 6. NODE: GET COMPANY HISTORY
+# ============================================================
+
+async def get_company_history(state: RecoveryState):
+
+    history = await client.companyhistory.find_first(
+        where={
+            "company_id": state["invoice"]["company_id"]
+        }
+    )
+
+    if history:
+        return {
+            "history": history.history
+        }
+
+    return {
+        "history": {}
+    }
+
+
+# ============================================================
+# 7. NODE: AI DECISION
 # ============================================================
 
 async def decision_agent(state: RecoveryState):
@@ -147,20 +179,31 @@ async def decision_agent(state: RecoveryState):
                 {
                     "role": "user",
                     "content": f"""
-Invoice information:
+CURRENT INVOICE
 
 Invoice ID:
 {state["invoice_id"]}
 
-Invoice:
-
+Invoice Information:
 {state["invoice"]}
 
-Previous customer communication:
+
+COMPANY HISTORY
+
+{state["history"]}
+
+
+PREVIOUS CUSTOMER COMMUNICATION
 
 {state["conversation"]}
 
-Analyze this invoice and determine the appropriate recovery action.
+
+TASK
+
+Analyze the invoice, company history, and previous
+communication.
+
+Determine the most appropriate recovery action.
 """
                 }
             ]
@@ -178,7 +221,7 @@ Analyze this invoice and determine the appropriate recovery action.
 
 
 # ============================================================
-# 7. NODE: CREATE RAZORPAY PAYMENT LINK
+# 8. NODE: CREATE RAZORPAY PAYMENT LINK
 # ============================================================
 
 async def create_payment_link(state: RecoveryState):
@@ -188,8 +231,13 @@ async def create_payment_link(state: RecoveryState):
     # TODO:
     # Call Razorpay API here.
 
-    # Example for now:
+    # Example for now
     payment_link = "https://rzp.io/demo-payment-link"
+
+    print(
+        f"Creating payment link for invoice "
+        f"{invoice['invoice_id']}"
+    )
 
     return {
         "payment_link": payment_link
@@ -197,7 +245,7 @@ async def create_payment_link(state: RecoveryState):
 
 
 # ============================================================
-# 8. NODE: SEND WHATSAPP MESSAGE
+# 9. NODE: SEND WHATSAPP MESSAGE
 # ============================================================
 
 async def send_message(state: RecoveryState):
@@ -241,60 +289,93 @@ Thank you.
     # TODO:
     # Call WhatsApp API here.
 
-    print("WHATSAPP MESSAGE:")
+    print("================================")
+    print("WHATSAPP MESSAGE")
+    print("================================")
     print(message)
 
     return {}
 
 
 # ============================================================
-# 9. NODE: HUMAN REVIEW
+# 10. NODE: HUMAN REVIEW
 # ============================================================
 
 async def human_review(state: RecoveryState):
 
+    print("================================")
     print("HUMAN REVIEW REQUIRED")
+    print("================================")
+
     print("Invoice:", state["invoice_id"])
     print("Reason:", state["reason"])
 
-    # Later:
+    # TODO:
     # Save escalation to database
     # Notify finance team
-    # Show on dashboard
+    # Show case on dashboard
 
     return {}
 
 
 # ============================================================
-# 10. ROUTER
+# 11. ROUTER
 # ============================================================
 
 def route_decision(state: RecoveryState):
 
+    # --------------------------------------------------------
     # Human intervention always has highest priority.
+    # --------------------------------------------------------
+
     if state["human_intervention"]:
         return "human_review"
 
+    # --------------------------------------------------------
     # If payment link is required, create it first.
-    if state["create_payment_link"]:
-        return "create_payment_link"
+    # --------------------------------------------------------
 
-    # Otherwise send message if required.
+    if state["create_payment_link"]:
+
+        # Payment link only makes sense if we are
+        # actually going to communicate with the customer.
+
+        if state["send_message"]:
+            return "create_payment_link"
+
+    # --------------------------------------------------------
+    # Send normal WhatsApp message.
+    # --------------------------------------------------------
+
     if state["send_message"]:
         return "send_message"
+
+    # --------------------------------------------------------
+    # No action required.
+    # --------------------------------------------------------
 
     return END
 
 
 # ============================================================
-# 11. BUILD GRAPH
+# 12. BUILD GRAPH
 # ============================================================
 
 graph = StateGraph(RecoveryState)
 
+
+# ============================================================
+# ADD NODES
+# ============================================================
+
 graph.add_node(
     "get_context",
     get_context
+)
+
+graph.add_node(
+    "get_company_history",
+    get_company_history
 )
 
 graph.add_node(
@@ -318,20 +399,46 @@ graph.add_node(
 )
 
 
+# ============================================================
 # START
+# ============================================================
+
+# Both context operations are independent,
+# so they can execute in parallel.
+
 graph.add_edge(
     START,
     "get_context"
 )
 
-# Context → AI
+graph.add_edge(
+    START,
+    "get_company_history"
+)
+
+
+# ============================================================
+# CONTEXT → AI
+# ============================================================
+
+# decision_agent has two incoming dependencies.
+# It will receive the state after both context nodes complete.
+
 graph.add_edge(
     "get_context",
     "decision_agent"
 )
 
+graph.add_edge(
+    "get_company_history",
+    "decision_agent"
+)
 
-# AI → conditional routing
+
+# ============================================================
+# AI → CONDITIONAL ROUTING
+# ============================================================
+
 graph.add_conditional_edges(
     "decision_agent",
     route_decision,
@@ -344,14 +451,20 @@ graph.add_conditional_edges(
 )
 
 
-# Payment link must be created BEFORE WhatsApp
+# ============================================================
+# PAYMENT LINK → WHATSAPP
+# ============================================================
+
 graph.add_edge(
     "create_payment_link",
     "send_message"
 )
 
 
-# Finish
+# ============================================================
+# FINISH
+# ============================================================
+
 graph.add_edge(
     "send_message",
     END
@@ -363,5 +476,9 @@ graph.add_edge(
 )
 
 
-# Compile
+# ============================================================
+# COMPILE
+# ============================================================
+
 recovery_graph = graph.compile()
+
