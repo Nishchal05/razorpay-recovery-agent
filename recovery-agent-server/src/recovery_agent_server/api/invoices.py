@@ -12,7 +12,6 @@ async def add_invoices(request: Request):
         data = await request.json()
         company_id = int(data['company_id'])
         invoice_name = data['invoice_name']
-        # parse date
         invoice_due_date = datetime.datetime.fromisoformat(data['invoice_due_date'].replace('Z', '+00:00'))
         invoice_amount = float(data['invoice_amount'])
         invoice_amount_status = bool(data.get('invoice_amount_status', False))

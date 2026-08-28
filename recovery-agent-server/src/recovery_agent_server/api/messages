@@ -1,0 +1,33 @@
+from fastapi import APIRouter, Request
+from prisma import Prisma
+from datetime import timedelta
+import datetime
+
+router = APIRouter()
+client = Prisma()
+
+@router.post("/messages")
+async def add_messages(request: Request):
+    try:
+        data = await request.json()
+        invoice_id = int(data['invoice_id'])
+        message_content = data['message_content']
+        message_type = data['message_type']
+        response = await client.message.create(
+            data={
+                "invoice_id": invoice_id,
+                "message_content": message_content,
+                "message_type": message_type
+            }
+        )
+        return response
+    except Exception as e:
+        return {"error": str(e), "message": "messages not added"}
+    
+@router.get("/messages")
+async def get_messages():
+    try:
+        response = await client.message.find_many(include={"invoice":True})
+        return response
+    except Exception as e:
+        return {"error": str(e), "message": "messages not fetched"}
