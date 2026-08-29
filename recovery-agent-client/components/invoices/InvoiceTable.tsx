@@ -52,7 +52,7 @@ export function InvoiceTable({ invoices, isLoading }: InvoiceTableProps) {
             <TableRow key={invoice.invoice_id}>
               <TableCell className="font-medium">{invoice.invoice_name}</TableCell>
               <TableCell>{invoice.company?.company_name || `Company #${invoice.company_id}`}</TableCell>
-              <TableCell>${invoice.invoice_amount.toFixed(2)}</TableCell>
+              <TableCell>₹{parseFloat(String(invoice.invoice_amount)).toFixed(2)}</TableCell>
               <TableCell>
                 {invoice.invoice_due_date ? format(new Date(invoice.invoice_due_date), 'MMM dd, yyyy') : 'N/A'}
               </TableCell>

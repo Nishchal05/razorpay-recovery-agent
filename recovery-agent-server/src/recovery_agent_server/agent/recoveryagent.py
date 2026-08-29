@@ -153,10 +153,9 @@ llm = ChatGoogleGenerativeAI(
 # 4. AI AGENT
 # ============================================================
 
-agent = create_agent(
-    model=llm,
-    response_format=RecoveryDecision,
-    prompt="""
+from langchain_core.prompts import ChatPromptTemplate
+
+_system_prompt = """
 You are an AI B2B receivables recovery assistant.
 
 Your job is to analyze an overdue invoice using:
@@ -207,7 +206,13 @@ DECISION RULES:
 
 Return the decision using the provided structured format.
 """
-)
+
+_prompt = ChatPromptTemplate.from_messages([
+    ("system", _system_prompt),
+    ("user", "{user_content}")
+])
+
+agent = _prompt | llm.with_structured_output(RecoveryDecision)
 
 
 # ============================================================
@@ -263,12 +268,9 @@ async def get_company_history(state: RecoveryState):
 
 async def decision_agent(state: RecoveryState):
     try:
-        result = await agent.ainvoke(
+        decision = await agent.ainvoke(
             {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": f"""
+                "user_content": f"""
 CURRENT INVOICE
 
 Invoice ID:
@@ -295,12 +297,10 @@ TASK
 
 Analyze the invoice, company history, and previous communication.
 Determine the most appropriate recovery action.
-""",
-                    }
-                ]
+"""
             }
         )
-        decision: Optional[RecoveryDecision] = result.get("structured_response")
+
     except Exception as exc:
         print(f"[decision_agent] LLM call failed: {exc}")
         decision = None

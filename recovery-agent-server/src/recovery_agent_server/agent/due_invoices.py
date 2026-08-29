@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from recovery_agent_server.database.prisma import client
-from .recoveryagent import recovery_agent
+from ..database.prisma import client
+from .recoveryagent import recovery_graph
 
 
 async def check_overdue_invoices():
@@ -16,12 +16,20 @@ async def check_overdue_invoices():
             "invoice_status": "PENDING"
         }
     )
-
+    print(invoices)
     results = []
 
     for invoice in invoices:
+        
+        try:
+            invoice_dict = invoice.model_dump()
+        except AttributeError:
+            invoice_dict = invoice.dict()
 
-        result = await recovery_agent(invoice)
+        result = await recovery_graph.ainvoke({
+            "invoice_id": invoice.invoice_id,
+            "invoice": invoice_dict
+        })
 
         results.append({
             "invoice_id": invoice.invoice_id,

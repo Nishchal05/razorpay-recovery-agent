@@ -1,7 +1,9 @@
 generator client {
-  provider        = "prisma-client-py"
-  interface       = "asyncio"
-  previewFeatures = ["postgresqlExtensions"]
+  provider                    = "prisma-client-py"
+  interface                   = "asyncio"
+  previewFeatures             = ["postgresqlExtensions"]
+  enable_experimental_decimal = true
+  recursive_type_depth        = -1
 }
 
 datasource db {
@@ -31,21 +33,27 @@ enum MessageType {
 // COMPANY
 // -------------------------
 
-model Company {
-  company_id      Int       @id @default(autoincrement())
-  company_name    String    @unique
-  company_address String
-  company_phone   String    @unique
-  company_email   String    @unique
-
-  invoices        Invoice[]
-  history         CompanyHistory?
-
-  created_at      DateTime  @default(now())
-  updated_at      DateTime  @updatedAt
+enum PreferredChannel {
+  WHATSAPP
+  EMAIL
+  VOICE_CALL
 }
 
+model Company {
+  company_id       Int              @id @default(autoincrement())
+  company_name     String           @unique
+  company_address  String
+  company_phone    String           @unique
+  company_email    String           @unique
 
+  preferred_channel PreferredChannel @default(WHATSAPP)
+
+  invoices         Invoice[]
+  history          CompanyHistory?
+
+  created_at       DateTime         @default(now())
+  updated_at       DateTime         @updatedAt
+}
 // -------------------------
 // COMPANY HISTORY / PROFILE
 // -------------------------

@@ -12,18 +12,23 @@ async def add_company(request: Request):
         companyemail = data['company_email']
         companyaddress = data['company_address']
         companyphone = data['company_phone']
+        preferred_channel = data.get('preferred_channel', 'WHATSAPP')
         
         response = await client.company.create(
             data={
                 "company_name": companyname,
                 "company_email": companyemail,
                 "company_address": companyaddress,
-                "company_phone": companyphone
+                "company_phone": companyphone,
+                "preferred_channel": preferred_channel,
             }
         )
+        print("Added Company ", response)
         return response
     except Exception as e:
+        print("Error adding company ", e)
         return {"error": str(e), "message": "company not added"}
+
 
 @router.get("/company")
 async def get_companies():
