@@ -20,6 +20,7 @@ dependencies = [
     "psycopg>=3.3.4",
     "python-dotenv>=1.2.3",
     "sqlalchemy>=2.0.52",
+    "twilio>=9.11.0",
     "uvicorn>=0.52.4",
 ]
 

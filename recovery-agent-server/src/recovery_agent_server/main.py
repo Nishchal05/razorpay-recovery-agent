@@ -32,6 +32,7 @@ async def shutdown():
 app.include_router(company_router)
 app.include_router(invoices_router)
 
+
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
