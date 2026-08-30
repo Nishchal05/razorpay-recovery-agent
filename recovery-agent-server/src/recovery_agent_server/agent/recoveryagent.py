@@ -128,7 +128,7 @@ class RecoveryState(TypedDict):
     conversation: str
     history: dict[str, Any]
     reminder_count: int
-
+    companydetail: dict[str, Any]
     send_message: bool
     create_payment_link: bool
     human_intervention: bool
@@ -145,7 +145,7 @@ class RecoveryState(TypedDict):
 # ============================================================
 
 llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash-lite"
+    model="gemini-3.5-flash-lite"
 )
 
 
@@ -255,11 +255,14 @@ async def get_company_history(state: RecoveryState):
         history = await db.companyhistory.find_first(
             where={"company_id": state["invoice"]["company_id"]}
         )
+        companydetail=await db.company.find_first(
+            where={"company_id": state["invoice"]["company_id"]}
+        )
     except Exception as exc:
         print(f"[get_company_history] failed: {exc}")
         return {"history": {}}
 
-    return {"history": history.history if history else {}}
+    return {"history": history.history if history else {},"companydetail":companydetail}
 
 
 # ============================================================
@@ -306,8 +309,7 @@ Determine the most appropriate recovery action.
         decision = None
 
     if decision is None:
-        # Structured output missing/failed — fail safe to human review
-        # rather than silently doing nothing or crashing the graph.
+ 
         return {
             "send_message": False,
             "create_payment_link": False,
@@ -320,9 +322,6 @@ Determine the most appropriate recovery action.
     send_message = decision.send_message
     human_intervention = decision.human_intervention
 
-    # --- Deterministic guardrail: hard cap on automated reminders. ---
-    # This is enforced in code, not just requested in the prompt, so an
-    # LLM that ignores instructions can't blow past the limit.
     if state.get("reminder_count", 0) >= MAX_AUTOMATED_REMINDERS and send_message:
         send_message = False
         human_intervention = True
@@ -410,74 +409,96 @@ def build_message(state: RecoveryState) -> str:
     )
 
 
+from twilio.rest import Client as TwilioClient
+
+
 async def send_message(state: RecoveryState):
+
     invoice = state["invoice"]
     payment_link = state.get("payment_link", "")
     message_type = state.get("message_type", "GENERAL_FOLLOWUP")
+    companydetail = state.get("companydetail")
 
-    customer_phone = invoice.get("customer_phone")
+    print(f"company details: {companydetail}")
+    print(f"sending: {message_type}")
+
+    customer_phone = (
+        getattr(companydetail, "company_phone", None)
+        if companydetail
+        else None
+    )
+
     if not customer_phone:
-        print(f"[send_message] no customer_phone on invoice {invoice.get('invoice_id')}, skipping")
+        print(
+            f"[send_message] no customer_phone "
+            f"on invoice {invoice.get('invoice_id')}"
+        )
         return {"whatsapp_sid": ""}
-
-    body_text = build_message(state)
-    content_sid = TEMPLATE_MAP.get(message_type, "")
 
     try:
         account_sid = os.environ["TWILIO_ACCOUNT_SID"]
         auth_token = os.environ["TWILIO_AUTH_TOKEN"]
         wa_from = os.environ["TWILIO_WHATSAPP_FROM"]
+        sandbox_mode = os.environ.get("TWILIO_SANDBOX_MODE", "false").lower() == "true"
+        ContentSid = os.environ.get("WA_TEMPLATE_SANDBOX") if sandbox_mode else TEMPLATE_MAP.get(message_type, "")
+        print(f"content_sid: {ContentSid}")
     except KeyError as exc:
-        print(f"[send_message] missing Twilio env var: {exc}")
+        print(f"[send_message] missing env variable: {exc}")
         return {"whatsapp_sid": ""}
 
     twilio_client = TwilioClient(account_sid, auth_token)
 
+    to_number = customer_phone if customer_phone.startswith("whatsapp:") else f"whatsapp:{customer_phone}"
+    from_number = wa_from if wa_from.startswith("whatsapp:") else f"whatsapp:{wa_from}"
+
+    body_text = build_message(state)
+
     try:
-        if content_sid:
+        if not ContentSid:
+            print(
+                f"[send_message] No ContentSid for '{message_type}'. "
+                f"Set WA_TEMPLATE_{message_type} or enable TWILIO_SANDBOX_MODE=true for testing."
+            )
+            return {"whatsapp_sid": ""}
+
+        if sandbox_mode:
+            # Twilio sandbox requires ContentSid — plain body is rejected (error 21654).
+            # Using the sandbox template with fixed demo variables.
+            print("[send_message] SANDBOX MODE — sending with sandbox ContentSid")
             message = twilio_client.messages.create(
-                to=f"whatsapp:{customer_phone}",
-                from_=f"whatsapp:{wa_from}",
-                content_sid=content_sid,
-                content_variables=json.dumps(
-                    {
-                        "1": invoice.get("customer_name", "Customer"),
-                        "2": invoice["invoice_name"],
-                        "3": str(invoice["invoice_amount"]),
-                        "4": payment_link,
-                    }
-                ),
+                to=to_number,
+                from_=from_number,
+                content_sid=ContentSid,
+                content_variables=json.dumps({
+                    "1": getattr(companydetail, "company_name", "Customer"),
+                    "2": invoice.get("invoice_name", ""),
+                }),
             )
         else:
-            # No approved template configured for this message_type —
-            # fall back to a plain body send (only valid within the
-            # 24h WhatsApp customer-service window).
             message = twilio_client.messages.create(
-                to=f"whatsapp:{customer_phone}",
-                from_=f"whatsapp:{wa_from}",
-                body=body_text,
+                to=to_number,
+                from_=from_number,
+                content_sid=ContentSid,
+                content_variables=json.dumps({
+                    "1": getattr(companydetail, "company_name", "Customer"),
+                    "2": invoice["invoice_name"],
+                    "3": str(invoice["invoice_amount"]),
+                    "4": payment_link,
+                }),
             )
+
     except Exception as exc:
         print(f"[send_message] Twilio send failed: {exc}")
         return {"whatsapp_sid": ""}
 
-    # Persist the outbound message so future runs can compute
-    # reminder_count correctly.
-    try:
-        await db.message.create(
-            data={
-                "invoice_id": state["invoice_id"],
-                "message_type": "REMINDER",
-                "content": body_text,
-            }
-        )
-    except Exception as exc:
-        print(f"[send_message] failed to log outbound message: {exc}")
+    print("================================")
+    print("WHATSAPP MESSAGE SENT")
+    print("================================")
+    print("SID:", message.sid)
 
-    print(f"WHATSAPP MESSAGE SID: {message.sid}")
-    return {"whatsapp_sid": message.sid}
-
-
+    return {
+        "whatsapp_sid": message.sid
+    }
 # ============================================================
 # 10. NODE: HUMAN REVIEW
 # ============================================================
