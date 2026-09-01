@@ -8,6 +8,7 @@ from .api.company import router as company_router
 from .api.company import client as company_client
 from .api.invoices import router as invoices_router
 from .api.invoices import client as invoices_client
+from .api.gmail import router as gmail_router
 from .database.prisma import client as db_client
 from .agent.due_invoices import check_overdue_invoices
 
@@ -46,11 +47,13 @@ async def shutdown():
 
 app.include_router(company_router)
 app.include_router(invoices_router)
+app.include_router(gmail_router)
 
 
 @app.get("/")
 def read_root():
     return {"Hello": "World"}
+
 
 @app.get("/test-workflow")
 async def test_workflow():

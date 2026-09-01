@@ -8,9 +8,8 @@ Fixes applied vs. the original draft:
    returns as part of its structured decision.
 2. `send_message()` hardcoded a single WhatsApp number. It now pulls the
    real customer number from the invoice/company record.
-3. The Twilio `Client` instance was assigned to a local variable named
-   `client`, shadowing the Prisma `client` imported at module scope.
-   Renamed to `twilio_client` to remove the foot-gun.
+3. WhatsApp delivery is now handled directly via the Meta WhatsApp Cloud API
+   (graph.facebook.com) — no Twilio dependency.
 4. The "never send more than 3 reminders" rule was ONLY a prompt
    instruction — an LLM can ignore prompt instructions. It's now also
    enforced in code (a real guardrail, not a suggestion): the reminder
@@ -19,7 +18,7 @@ Fixes applied vs. the original draft:
 5. Added defensive handling for the case where `structured_response` is
    missing from the agent result (a known intermittent LangChain issue)
    — falls back to human_review instead of crashing.
-6. Wrapped all external calls (LLM, Twilio, Razorpay, DB) in try/except
+6. Wrapped all external calls (LLM, Meta API, Razorpay, DB) in try/except
    so one failure doesn't take down the whole graph run.
 7. Added a `promise_to_pay_date` field so a customer's "I'll pay Monday"
    response actually gets captured as structured data instead of living
@@ -40,13 +39,13 @@ Assumptions you'll need to adjust to your real schema (marked with
 from typing import Any, Literal, Optional, TypedDict
 
 from pydantic import BaseModel, Field
+import httpx
 import json
 import os
 
 from langchain.agents import create_agent
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
-from twilio.rest import Client as TwilioClient
 
 from ..database.prisma import client as db
 
@@ -57,16 +56,17 @@ from ..database.prisma import client as db
 
 MAX_AUTOMATED_REMINDERS = 3
 
-# Map decision message_type -> approved WhatsApp template content SID.
+# Map decision message_type -> Meta-approved WhatsApp template name.
 # WhatsApp requires pre-approved templates for business-initiated
 # messages outside the 24h customer-service window, so free-text is
 # not used here even though build_message() produces free text — the
 # generated text is passed as template variables instead.
+# Template names are created at: business.facebook.com -> WhatsApp Manager -> Message Templates
 TEMPLATE_MAP = {
-    "PAYMENT_REMINDER": os.environ.get("WA_TEMPLATE_PAYMENT_REMINDER", ""),
-    "PROMISE_FOLLOWUP": os.environ.get("WA_TEMPLATE_PROMISE_FOLLOWUP", ""),
-    "OVERDUE_REMINDER": os.environ.get("WA_TEMPLATE_OVERDUE_REMINDER", ""),
-    "GENERAL_FOLLOWUP": os.environ.get("WA_TEMPLATE_GENERAL_FOLLOWUP", ""),
+    "PAYMENT_REMINDER": os.environ.get("WA_TEMPLATE_PAYMENT_REMINDER", "jaspers_market_order_confirmation_v1"),
+    "PROMISE_FOLLOWUP": os.environ.get("WA_TEMPLATE_PROMISE_FOLLOWUP", "jaspers_market_order_confirmation_v1"),
+    "OVERDUE_REMINDER": os.environ.get("WA_TEMPLATE_OVERDUE_REMINDER", "jaspers_market_order_confirmation_v1"),
+    "GENERAL_FOLLOWUP": os.environ.get("WA_TEMPLATE_GENERAL_FOLLOWUP", "jaspers_market_order_confirmation_v1"),
 }
 
 
@@ -367,8 +367,8 @@ async def create_payment_link(state: RecoveryState):
 
 def build_message(state: RecoveryState) -> str:
     """Builds the human-readable message text used as a template
-    variable. Kept even though we send via an approved WhatsApp
-    template, so the exact wording is visible/testable outside Twilio.
+    variable. Kept even though we send via a Meta-approved WhatsApp
+    template, so the exact wording is visible/testable independently.
     """
     invoice = state["invoice"]
     payment_link = state.get("payment_link", "")
@@ -409,10 +409,20 @@ def build_message(state: RecoveryState) -> str:
     )
 
 
-from twilio.rest import Client as TwilioClient
+async def send_whatsapp_message(state: RecoveryState):
+    """Send a WhatsApp message via the Meta WhatsApp Cloud API.
 
+    Required env vars:
+        META_ACCESS_TOKEN      — System User or page access token
+        META_PHONE_NUMBER_ID   — Sender's Phone Number ID from Meta App Dashboard
+        META_API_VERSION       — Graph API version, e.g. v25.0 (default: v25.0)
 
-async def send_message(state: RecoveryState):
+    Optional env vars (override per-type template names):
+        WA_TEMPLATE_PAYMENT_REMINDER
+        WA_TEMPLATE_PROMISE_FOLLOWUP
+        WA_TEMPLATE_OVERDUE_REMINDER
+        WA_TEMPLATE_GENERAL_FOLLOWUP
+    """
 
     invoice = state["invoice"]
     payment_link = state.get("payment_link", "")
@@ -435,69 +445,83 @@ async def send_message(state: RecoveryState):
         )
         return {"whatsapp_sid": ""}
 
+    # Strip any "whatsapp:" prefix — Meta API expects a bare E.164 number
+    to_number = customer_phone.removeprefix("whatsapp:").lstrip("+")
+
+    # ── Load Meta credentials ──────────────────────────────────────────────
     try:
-        account_sid = os.environ["TWILIO_ACCOUNT_SID"]
-        auth_token = os.environ["TWILIO_AUTH_TOKEN"]
-        wa_from = os.environ["TWILIO_WHATSAPP_FROM"]
-        sandbox_mode = os.environ.get("TWILIO_SANDBOX_MODE", "false").lower() == "true"
-        ContentSid = os.environ.get("WA_TEMPLATE_SANDBOX") if sandbox_mode else TEMPLATE_MAP.get(message_type, "")
-        print(f"content_sid: {ContentSid}")
+        access_token = os.environ["META_ACCESS_TOKEN"]
+        phone_number_id = os.environ["META_PHONE_NUMBER_ID"]
     except KeyError as exc:
         print(f"[send_message] missing env variable: {exc}")
         return {"whatsapp_sid": ""}
 
-    twilio_client = TwilioClient(account_sid, auth_token)
+    api_version = os.environ.get("META_API_VERSION", "v25.0")
+    template_name = TEMPLATE_MAP.get(message_type, "")
 
-    to_number = customer_phone if customer_phone.startswith("whatsapp:") else f"whatsapp:{customer_phone}"
-    from_number = wa_from if wa_from.startswith("whatsapp:") else f"whatsapp:{wa_from}"
-
-    body_text = build_message(state)
-
-    try:
-        if not ContentSid:
-            print(
-                f"[send_message] No ContentSid for '{message_type}'. "
-                f"Set WA_TEMPLATE_{message_type} or enable TWILIO_SANDBOX_MODE=true for testing."
-            )
-            return {"whatsapp_sid": ""}
-
-        if sandbox_mode:
-            # Twilio sandbox requires ContentSid — plain body is rejected (error 21654).
-            # Using the sandbox template with fixed demo variables.
-            print("[send_message] SANDBOX MODE — sending with sandbox ContentSid")
-            message = twilio_client.messages.create(
-                to=to_number,
-                from_=from_number,
-                content_sid=ContentSid,
-                content_variables=json.dumps({
-                    "1": getattr(companydetail, "company_name", "Customer"),
-                    "2": invoice.get("invoice_name", ""),
-                }),
-            )
-        else:
-            message = twilio_client.messages.create(
-                to=to_number,
-                from_=from_number,
-                content_sid=ContentSid,
-                content_variables=json.dumps({
-                    "1": getattr(companydetail, "company_name", "Customer"),
-                    "2": invoice["invoice_name"],
-                    "3": str(invoice["invoice_amount"]),
-                    "4": payment_link,
-                }),
-            )
-
-    except Exception as exc:
-        print(f"[send_message] Twilio send failed: {exc}")
+    if not template_name:
+        print(
+            f"[send_message] No template name for '{message_type}'. "
+            f"Set WA_TEMPLATE_{message_type} in your .env file."
+        )
         return {"whatsapp_sid": ""}
 
+    # ── Build the template payload ─────────────────────────────────────────
+    # Template: jaspers_market_order_confirmation_v1
+    # Body parameters: {{1}} customer_name, {{2}} invoice_name, {{3}} amount
+    # Adjust the components list if your approved template has different variables.
+    company_name = getattr(companydetail, "company_name", "Valued Customer")
+    invoice_name = invoice.get("invoice_name", "")
+    invoice_amount = str(invoice.get("invoice_amount", ""))
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": os.environ.get("WA_TEMPLATE_LANG", "en_US")},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": company_name},
+                        {"type": "text", "text": invoice_name},
+                        {"type": "text", "text": invoice_amount},
+                    ],
+                }
+            ],
+        },
+    }
+
+    # ── POST to Meta Cloud API ─────────────────────────────────────────────
+    url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            response = await http.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as exc:
+        print(f"[send_message] Meta API HTTP error {exc.response.status_code}: {exc.response.text}")
+        return {"whatsapp_sid": ""}
+    except Exception as exc:
+        print(f"[send_message] Meta API call failed: {exc}")
+        return {"whatsapp_sid": ""}
+
+    message_id = data.get("messages", [{}])[0].get("id", "")
+
     print("================================")
-    print("WHATSAPP MESSAGE SENT")
+    print("WHATSAPP MESSAGE SENT (Meta API)")
     print("================================")
-    print("SID:", message.sid)
+    print("Message ID:", message_id)
 
     return {
-        "whatsapp_sid": message.sid
+        "whatsapp_sid": message_id
     }
 # ============================================================
 # 10. NODE: HUMAN REVIEW
@@ -551,7 +575,7 @@ graph.add_node("get_context", get_context)
 graph.add_node("get_company_history", get_company_history)
 graph.add_node("decision_agent", decision_agent)
 graph.add_node("create_payment_link", create_payment_link)
-graph.add_node("send_message", send_message)
+graph.add_node("send_whatsapp_message", send_whatsapp_message)
 graph.add_node("human_review", human_review)
 
 graph.add_edge(START, "get_context")
@@ -566,13 +590,13 @@ graph.add_conditional_edges(
     {
         "human_review": "human_review",
         "create_payment_link": "create_payment_link",
-        "send_message": "send_message",
+        "send_whatsapp_message": "send_whatsapp_message",
         END: END,
     },
 )
 
-graph.add_edge("create_payment_link", "send_message")
-graph.add_edge("send_message", END)
+graph.add_edge("create_payment_link", "send_whatsapp_message")
+graph.add_edge("send_whatsapp_message", END)
 graph.add_edge("human_review", END)
 
 recovery_graph = graph.compile()
