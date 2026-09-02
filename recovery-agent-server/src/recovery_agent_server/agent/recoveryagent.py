@@ -56,18 +56,10 @@ from ..database.prisma import client as db
 
 MAX_AUTOMATED_REMINDERS = 3
 
-# Map decision message_type -> Meta-approved WhatsApp template name.
-# WhatsApp requires pre-approved templates for business-initiated
-# messages outside the 24h customer-service window, so free-text is
-# not used here even though build_message() produces free text — the
-# generated text is passed as template variables instead.
-# Template names are created at: business.facebook.com -> WhatsApp Manager -> Message Templates
-TEMPLATE_MAP = {
-    "PAYMENT_REMINDER": os.environ.get("WA_TEMPLATE_PAYMENT_REMINDER", "jaspers_market_order_confirmation_v1"),
-    "PROMISE_FOLLOWUP": os.environ.get("WA_TEMPLATE_PROMISE_FOLLOWUP", "jaspers_market_order_confirmation_v1"),
-    "OVERDUE_REMINDER": os.environ.get("WA_TEMPLATE_OVERDUE_REMINDER", "jaspers_market_order_confirmation_v1"),
-    "GENERAL_FOLLOWUP": os.environ.get("WA_TEMPLATE_GENERAL_FOLLOWUP", "jaspers_market_order_confirmation_v1"),
-}
+# Channel node imports
+# TEMPLATE_MAP has been moved to agent/channels/whatsapp.py
+from .channels.whatsapp import send_whatsapp_message  # noqa: E402
+from .channels.email import send_email_message  # noqa: E402
 
 
 # ============================================================
@@ -124,7 +116,7 @@ class RecoveryDecision(BaseModel):
 class RecoveryState(TypedDict):
     invoice_id: int
     invoice: dict
-
+    preferred_channel: str          # "whatsapp" | "email"
     conversation: str
     history: dict[str, Any]
     reminder_count: int
@@ -134,10 +126,10 @@ class RecoveryState(TypedDict):
     human_intervention: bool
     message_type: str
     promise_to_pay_date: Optional[str]
-
     reason: str
     payment_link: str
-    whatsapp_sid: str
+    whatsapp_sid: str               # set when preferred_channel == "whatsapp"
+    email_sid: str                  # set when preferred_channel == "email"
 
 
 # ============================================================
@@ -362,167 +354,10 @@ async def create_payment_link(state: RecoveryState):
 
 
 # ============================================================
-# 9. NODE: SEND WHATSAPP MESSAGE
+# 9. CHANNEL NODES: imported from agent/channels/
 # ============================================================
-
-def build_message(state: RecoveryState) -> str:
-    """Builds the human-readable message text used as a template
-    variable. Kept even though we send via a Meta-approved WhatsApp
-    template, so the exact wording is visible/testable independently.
-    """
-    invoice = state["invoice"]
-    payment_link = state.get("payment_link", "")
-    message_type = state.get("message_type", "GENERAL_FOLLOWUP")
-
-    invoice_name = invoice["invoice_name"]
-    amount = invoice["invoice_amount"]
-
-    if message_type == "PAYMENT_REMINDER" and payment_link:
-        return (
-            f"Hello,\n\nThis is a friendly reminder regarding invoice "
-            f"{invoice_name}.\n\nThe outstanding amount is ₹{amount}.\n\n"
-            f"You can complete the payment using the link below:\n\n"
-            f"{payment_link}\n\nPlease let us know if you have any "
-            f"questions.\n\nThank you."
-        )
-
-    if message_type == "PROMISE_FOLLOWUP":
-        return (
-            f"Hello,\n\nYou previously mentioned that the payment for "
-            f"invoice {invoice_name} would be completed soon.\n\nThe "
-            f"outstanding amount of ₹{amount} is still pending.\n\nCould "
-            f"you please provide us with an updated payment date?\n\n"
-            f"Thank you."
-        )
-
-    if message_type == "OVERDUE_REMINDER":
-        return (
-            f"Hello,\n\nThis is a reminder that invoice {invoice_name} "
-            f"for ₹{amount} is currently overdue.\n\nPlease let us know "
-            f"when we can expect the payment.\n\nThank you."
-        )
-
-    return (
-        f"Hello,\n\nWe are following up regarding invoice {invoice_name} "
-        f"with an outstanding amount of ₹{amount}.\n\nPlease let us know "
-        f"if there is any issue with the payment.\n\nThank you."
-    )
-
-
-async def send_whatsapp_message(state: RecoveryState):
-    """Send a WhatsApp message via the Meta WhatsApp Cloud API.
-
-    Required env vars:
-        META_ACCESS_TOKEN      — System User or page access token
-        META_PHONE_NUMBER_ID   — Sender's Phone Number ID from Meta App Dashboard
-        META_API_VERSION       — Graph API version, e.g. v25.0 (default: v25.0)
-
-    Optional env vars (override per-type template names):
-        WA_TEMPLATE_PAYMENT_REMINDER
-        WA_TEMPLATE_PROMISE_FOLLOWUP
-        WA_TEMPLATE_OVERDUE_REMINDER
-        WA_TEMPLATE_GENERAL_FOLLOWUP
-    """
-
-    invoice = state["invoice"]
-    payment_link = state.get("payment_link", "")
-    message_type = state.get("message_type", "GENERAL_FOLLOWUP")
-    companydetail = state.get("companydetail")
-
-    print(f"company details: {companydetail}")
-    print(f"sending: {message_type}")
-
-    customer_phone = (
-        getattr(companydetail, "company_phone", None)
-        if companydetail
-        else None
-    )
-
-    if not customer_phone:
-        print(
-            f"[send_message] no customer_phone "
-            f"on invoice {invoice.get('invoice_id')}"
-        )
-        return {"whatsapp_sid": ""}
-
-    # Strip any "whatsapp:" prefix — Meta API expects a bare E.164 number
-    to_number = customer_phone.removeprefix("whatsapp:").lstrip("+")
-
-    # ── Load Meta credentials ──────────────────────────────────────────────
-    try:
-        access_token = os.environ["META_ACCESS_TOKEN"]
-        phone_number_id = os.environ["META_PHONE_NUMBER_ID"]
-    except KeyError as exc:
-        print(f"[send_message] missing env variable: {exc}")
-        return {"whatsapp_sid": ""}
-
-    api_version = os.environ.get("META_API_VERSION", "v25.0")
-    template_name = TEMPLATE_MAP.get(message_type, "")
-
-    if not template_name:
-        print(
-            f"[send_message] No template name for '{message_type}'. "
-            f"Set WA_TEMPLATE_{message_type} in your .env file."
-        )
-        return {"whatsapp_sid": ""}
-
-    # ── Build the template payload ─────────────────────────────────────────
-    # Template: jaspers_market_order_confirmation_v1
-    # Body parameters: {{1}} customer_name, {{2}} invoice_name, {{3}} amount
-    # Adjust the components list if your approved template has different variables.
-    company_name = getattr(companydetail, "company_name", "Valued Customer")
-    invoice_name = invoice.get("invoice_name", "")
-    invoice_amount = str(invoice.get("invoice_amount", ""))
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {"code": os.environ.get("WA_TEMPLATE_LANG", "en_US")},
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": company_name},
-                        {"type": "text", "text": invoice_name},
-                        {"type": "text", "text": invoice_amount},
-                    ],
-                }
-            ],
-        },
-    }
-
-    # ── POST to Meta Cloud API ─────────────────────────────────────────────
-    url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
-    headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json",
-    }
-
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as http:
-            response = await http.post(url, headers=headers, json=payload)
-            response.raise_for_status()
-            data = response.json()
-    except httpx.HTTPStatusError as exc:
-        print(f"[send_message] Meta API HTTP error {exc.response.status_code}: {exc.response.text}")
-        return {"whatsapp_sid": ""}
-    except Exception as exc:
-        print(f"[send_message] Meta API call failed: {exc}")
-        return {"whatsapp_sid": ""}
-
-    message_id = data.get("messages", [{}])[0].get("id", "")
-
-    print("================================")
-    print("WHATSAPP MESSAGE SENT (Meta API)")
-    print("================================")
-    print("Message ID:", message_id)
-
-    return {
-        "whatsapp_sid": message_id
-    }
+# send_whatsapp_message  — channels/whatsapp.py  (Meta Cloud API)
+# send_email_message     — channels/email.py     (Gmail API)
 # ============================================================
 # 10. NODE: HUMAN REVIEW
 # ============================================================
@@ -560,7 +395,11 @@ def route_decision(state: RecoveryState):
         return "create_payment_link"
 
     if state["send_message"]:
-        return "send_message"
+        # Branch to the correct channel based on caller's preference
+        channel = state.get("preferred_channel", "whatsapp").lower()
+        if channel == "email":
+            return "send_email_message"
+        return "send_whatsapp_message"
 
     return END
 
@@ -576,6 +415,7 @@ graph.add_node("get_company_history", get_company_history)
 graph.add_node("decision_agent", decision_agent)
 graph.add_node("create_payment_link", create_payment_link)
 graph.add_node("send_whatsapp_message", send_whatsapp_message)
+graph.add_node("send_email_message", send_email_message)
 graph.add_node("human_review", human_review)
 
 graph.add_edge(START, "get_context")
@@ -591,12 +431,29 @@ graph.add_conditional_edges(
         "human_review": "human_review",
         "create_payment_link": "create_payment_link",
         "send_whatsapp_message": "send_whatsapp_message",
+        "send_email_message": "send_email_message",
         END: END,
     },
 )
 
-graph.add_edge("create_payment_link", "send_whatsapp_message")
+# After creating a payment link, send via whichever channel was requested.
+# The create_payment_link node runs first; route_decision already decided the
+# channel, so we need a second per-channel fan-out from create_payment_link.
+def route_after_payment_link(state: RecoveryState):
+    channel = state.get("preferred_channel", "whatsapp").lower()
+    return "send_email_message" if channel == "email" else "send_whatsapp_message"
+
+graph.add_conditional_edges(
+    "create_payment_link",
+    route_after_payment_link,
+    {
+        "send_whatsapp_message": "send_whatsapp_message",
+        "send_email_message": "send_email_message",
+    },
+)
+
 graph.add_edge("send_whatsapp_message", END)
+graph.add_edge("send_email_message", END)
 graph.add_edge("human_review", END)
 
 recovery_graph = graph.compile()
