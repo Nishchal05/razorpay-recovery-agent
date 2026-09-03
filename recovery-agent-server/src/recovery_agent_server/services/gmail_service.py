@@ -36,6 +36,11 @@ SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 _DEFAULT_TOKEN = Path(__file__).parent / "gmail_token.json"
 _TOKEN_FILE = Path(os.environ.get("GMAIL_TOKEN_FILE", str(_DEFAULT_TOKEN)))
 
+# Module-level cache: holds the Flow object between build_auth_url() and
+# exchange_code() so that the PKCE code_verifier is preserved.
+# This is safe for a single-process server (uvicorn with 1 worker).
+_pending_flow: Optional["Flow"] = None
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -64,7 +69,13 @@ def _client_config() -> dict:
 
 
 def build_auth_url() -> str:
-    """Return the Google OAuth2 authorization URL to redirect the user to."""
+    """Return the Google OAuth2 authorization URL to redirect the user to.
+
+    The Flow object is cached in ``_pending_flow`` so that the PKCE
+    code_verifier survives until ``exchange_code()`` is called.
+    """
+    global _pending_flow
+
     redirect_uri = os.environ.get(
         "GMAIL_REDIRECT_URI", "http://localhost:8000/auth/gmail/callback"
     )
@@ -78,6 +89,8 @@ def build_auth_url() -> str:
         include_granted_scopes="true",
         prompt="consent",         # always show consent so we get refresh_token
     )
+    # Cache the flow so exchange_code() can reuse the same code_verifier.
+    _pending_flow = flow
     return auth_url
 
 
@@ -85,16 +98,29 @@ def exchange_code(code: str) -> Credentials:
     """
     Exchange an authorization code for credentials and persist them to disk.
 
+    Reuses the Flow cached by ``build_auth_url()`` so that the PKCE
+    code_verifier matches what was sent to Google.
+
     Returns the Credentials object.
     """
-    redirect_uri = os.environ.get(
-        "GMAIL_REDIRECT_URI", "http://localhost:8000/auth/gmail/callback"
-    )
-    flow = Flow.from_client_config(
-        _client_config(),
-        scopes=SCOPES,
-        redirect_uri=redirect_uri,
-    )
+    global _pending_flow
+
+    if _pending_flow is not None:
+        # Reuse the same Flow instance to preserve the code_verifier.
+        flow = _pending_flow
+        _pending_flow = None  # consume it so it isn't reused accidentally
+    else:
+        # Fallback: build a fresh flow without PKCE (works if Google didn't
+        # require a verifier, e.g. desktop app flow).
+        redirect_uri = os.environ.get(
+            "GMAIL_REDIRECT_URI", "http://localhost:8000/auth/gmail/callback"
+        )
+        flow = Flow.from_client_config(
+            _client_config(),
+            scopes=SCOPES,
+            redirect_uri=redirect_uri,
+        )
+
     flow.fetch_token(code=code)
     creds = flow.credentials
     _save_credentials(creds)

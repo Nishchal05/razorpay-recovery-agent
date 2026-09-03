@@ -39,8 +39,8 @@ function CompanyCreatorModal({ onClose, onCreated }: { onClose: () => void; onCr
         <div className="p-6">
           <div className="flex items-center justify-between mb-5">
             <div>
-              <h3 className="text-lg font-bold text-white">Add New Company</h3>
-              <p className="text-zinc-500 text-sm mt-0.5">Register the company before creating the invoice.</p>
+              <h3 className="text-lg font-bold text-white">Add New Customer</h3>
+              <p className="text-zinc-500 text-sm mt-0.5">Add a new customer to create this invoice for.</p>
             </div>
             <button
               onClick={onClose}
@@ -207,7 +207,7 @@ export function InvoiceForm({ onSuccess }: InvoiceFormProps) {
 
         {/* Company — smart combobox */}
         <div className="space-y-1.5">
-          <Label className="text-zinc-300 text-sm font-medium">Company</Label>
+          <Label className="text-zinc-300 text-sm font-medium">Customer</Label>
           {isLoadingCompanies ? (
             <div className="h-10 rounded-lg border border-zinc-800 bg-zinc-900/60 animate-pulse" />
           ) : (

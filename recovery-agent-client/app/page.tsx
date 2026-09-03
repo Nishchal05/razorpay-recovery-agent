@@ -21,7 +21,7 @@ import {
 
 const fadeIn = {
   hidden: { opacity: 0, y: 20 },
-  visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } }
+  visible: { opacity: 1, y: 0, transition: { duration: 0.5, ease: 'easeOut' as const } }
 };
 
 const staggerContainer = {
@@ -36,6 +36,24 @@ export default function Home() {
       {/* Background gradients */}
       <div className="fixed top-[-20%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full pointer-events-none" />
       <div className="fixed bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-purple-600/10 blur-[120px] rounded-full pointer-events-none" />
+
+      {/* Minimal top nav */}
+      <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 py-4 border-b border-white/5 bg-black/40 backdrop-blur-xl">
+        <Link href="/" className="flex items-center gap-2.5">
+          <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center">
+            <BrainCircuit className="w-4 h-4 text-white" />
+          </div>
+          <span className="font-bold text-white text-sm tracking-tight">Recovery Agent</span>
+        </Link>
+        <div className="flex items-center gap-3">
+          <Link href="/signin" className="text-zinc-400 hover:text-white text-sm font-medium transition-colors px-3 py-1.5">
+            Sign In
+          </Link>
+          <Link href="/signup" className="text-white text-sm font-semibold px-4 py-1.5 rounded-full bg-indigo-600 hover:bg-indigo-700 transition-all shadow-[0_0_12px_rgba(79,70,229,0.3)]">
+            Sign Up
+          </Link>
+        </div>
+      </nav>
 
       {/* --- HERO SECTION --- */}
       <section className="relative pt-32 pb-20 px-4 md:px-6 z-10 flex flex-col items-center justify-center min-h-[90vh]">
@@ -60,12 +78,12 @@ export default function Home() {
           </motion.p>
           
           <motion.div variants={fadeIn} className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
-            <Link href="/companies" className="inline-flex items-center justify-center px-8 py-4 text-base font-medium rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_30px_rgba(79,70,229,0.5)]">
+            <Link href="/signup" className="inline-flex items-center justify-center px-8 py-4 text-base font-medium rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_30px_rgba(79,70,229,0.5)]">
               Start Recovering <ArrowRight className="ml-2 w-5 h-5" />
             </Link>
-            <button className="inline-flex items-center justify-center px-8 py-4 text-base font-medium rounded-full bg-white/5 border border-white/10 text-zinc-300 hover:bg-white/10 hover:text-white transition-all backdrop-blur-sm">
-              <PlayCircle className="mr-2 w-5 h-5" /> View Demo
-            </button>
+            <Link href="/signin" className="inline-flex items-center justify-center px-8 py-4 text-base font-medium rounded-full bg-white/5 border border-white/10 text-zinc-300 hover:bg-white/10 hover:text-white transition-all backdrop-blur-sm">
+              <PlayCircle className="mr-2 w-5 h-5" /> Sign In
+            </Link>
           </motion.div>
 
           {/* Hero Visual Workflow — Premium Redesign */}
@@ -486,7 +504,7 @@ export default function Home() {
         <div className="absolute inset-0 bg-indigo-600/10 blur-[100px] pointer-events-none" />
         <div className="container mx-auto px-4 text-center">
           <h2 className="text-4xl md:text-6xl font-bold text-white mb-8">Stop chasing invoices.</h2>
-          <Link href="/companies" className="inline-flex items-center justify-center px-10 py-5 text-lg font-medium rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] hover:shadow-[0_0_40px_rgba(79,70,229,0.6)]">
+          <Link href="/signup" className="inline-flex items-center justify-center px-10 py-5 text-lg font-medium rounded-full bg-indigo-600 text-white hover:bg-indigo-700 transition-all shadow-[0_0_30px_rgba(79,70,229,0.4)] hover:shadow-[0_0_40px_rgba(79,70,229,0.6)]">
             Start Recovering Now <ArrowRight className="ml-2 w-6 h-6" />
           </Link>
         </div>

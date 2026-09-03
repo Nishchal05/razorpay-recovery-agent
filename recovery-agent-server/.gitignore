@@ -11,3 +11,5 @@ wheels/
 
 .env
 .env.local
+*_token.json
+gmail_token.json

@@ -254,7 +254,14 @@ async def get_company_history(state: RecoveryState):
         print(f"[get_company_history] failed: {exc}")
         return {"history": {}}
 
-    return {"history": history.history if history else {},"companydetail":companydetail}
+    # Sync preferred_channel from the company record into state so the
+    # router always uses the DB value rather than the invocation default.
+    company_channel = getattr(companydetail, "preferred_channel", None) or "WHATSAPP"
+    return {
+        "history": history.history if history else {},
+        "companydetail": companydetail,
+        "preferred_channel": company_channel.lower(),   # normalise to lowercase
+    }
 
 
 # ============================================================
@@ -387,6 +394,21 @@ async def human_review(state: RecoveryState):
 # 11. ROUTER
 # ============================================================
 
+def _resolve_channel(state: RecoveryState) -> str:
+    """Return the normalised channel string ("email" or "whatsapp").
+
+    Priority:
+      1. state["preferred_channel"]  — written by get_company_history from the DB
+      2. companydetail.preferred_channel — direct attribute fallback
+      3. "whatsapp" — hardcoded default
+    """
+    channel = state.get("preferred_channel") or ""
+    if not channel:
+        companydetail = state.get("companydetail")
+        channel = getattr(companydetail, "preferred_channel", None) or "whatsapp"
+    return channel.lower()
+
+
 def route_decision(state: RecoveryState):
     if state["human_intervention"]:
         return "human_review"
@@ -395,8 +417,8 @@ def route_decision(state: RecoveryState):
         return "create_payment_link"
 
     if state["send_message"]:
-        # Branch to the correct channel based on caller's preference
-        channel = state.get("preferred_channel", "whatsapp").lower()
+        channel = _resolve_channel(state)
+        print(f"[router] preferred_channel resolved to '{channel}'")
         if channel == "email":
             return "send_email_message"
         return "send_whatsapp_message"
@@ -440,7 +462,8 @@ graph.add_conditional_edges(
 # The create_payment_link node runs first; route_decision already decided the
 # channel, so we need a second per-channel fan-out from create_payment_link.
 def route_after_payment_link(state: RecoveryState):
-    channel = state.get("preferred_channel", "whatsapp").lower()
+    channel = _resolve_channel(state)
+    print(f"[router/payment_link] preferred_channel resolved to '{channel}'")
     return "send_email_message" if channel == "email" else "send_whatsapp_message"
 
 graph.add_conditional_edges(
