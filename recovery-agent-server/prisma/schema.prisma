@@ -30,6 +30,24 @@ enum MessageType {
 
 
 // -------------------------
+// BUSINESS (SERVICE PROVIDER)
+// -------------------------
+
+model Business {
+  id            Int       @id @default(autoincrement())
+  business_name String
+  owner_name    String
+  email         String    @unique
+  password_hash String
+
+  companies     Company[]
+
+  created_at    DateTime  @default(now())
+  updated_at    DateTime  @updatedAt
+}
+
+
+// -------------------------
 // COMPANY
 // -------------------------
 
@@ -41,18 +59,23 @@ enum PreferredChannel {
 
 model Company {
   company_id       Int              @id @default(autoincrement())
-  company_name     String           @unique
+  company_name     String
   company_address  String
-  company_phone    String           @unique
-  company_email    String           @unique
+  company_phone    String
+  company_email    String
 
   preferred_channel PreferredChannel @default(WHATSAPP)
+
+  business_id      Int?
+  business         Business?        @relation(fields: [business_id], references: [id], onDelete: SetNull)
 
   invoices         Invoice[]
   history          CompanyHistory?
 
   created_at       DateTime         @default(now())
   updated_at       DateTime         @updatedAt
+
+  @@index([business_id])
 }
 // -------------------------
 // COMPANY HISTORY / PROFILE

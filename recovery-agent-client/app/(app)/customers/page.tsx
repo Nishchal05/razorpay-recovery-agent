@@ -1,12 +1,14 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { getCompanies } from '../../../lib/api/companies';
 import { getInvoices } from '../../../lib/api/invoices';
 import { Company, Invoice } from '../../../lib/types';
 import { SkeletonCard } from '../../../components/ui/Skeleton';
-import { Users, MessageCircle, Mail, Phone, ArrowRight } from 'lucide-react';
+import { Users, MessageCircle, Mail, Phone, ArrowRight, Plus, X } from 'lucide-react';
+import { CompanyForm } from '../../../components/companies/CompanyForm';
 
 function ChannelBadge({ channel }: { channel: string }) {
   if (channel === 'WHATSAPP') return (
@@ -27,6 +29,8 @@ function ChannelBadge({ channel }: { channel: string }) {
 }
 
 export default function CustomersPage() {
+  const queryClient = useQueryClient();
+  const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const { data: companies = [], isLoading: coLoading } = useQuery({ queryKey: ['companies'], queryFn: getCompanies });
   const { data: invoices = [] } = useQuery({ queryKey: ['invoices'], queryFn: getInvoices });
 
@@ -39,13 +43,19 @@ export default function CustomersPage() {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-white">Customers</h1>
+          <h1 className="text-2xl font-bold text-white">Companies & Customers</h1>
           <p className="text-zinc-500 text-sm mt-0.5">
-            {companies.length} customer{companies.length !== 1 ? 's' : ''} · customers are added when you create an invoice
+            {companies.length} compan{companies.length !== 1 ? 'ies' : 'y'} registered for automated payment recovery.
           </p>
         </div>
+        <button
+          onClick={() => setIsAddModalOpen(true)}
+          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-all shadow-[0_0_20px_rgba(79,70,229,0.3)] hover:shadow-[0_0_30px_rgba(79,70,229,0.5)] cursor-pointer"
+        >
+          <Plus className="w-4 h-4" /> Add Company
+        </button>
       </div>
 
       {coLoading ? (
@@ -57,11 +67,22 @@ export default function CustomersPage() {
           <div className="w-14 h-14 rounded-2xl bg-white/5 border border-white/8 flex items-center justify-center mx-auto mb-4">
             <Users className="w-6 h-6 text-zinc-600" />
           </div>
-          <p className="text-white font-semibold mb-1">No customers yet</p>
-          <p className="text-zinc-500 text-sm mb-6">Customers are automatically added when you create an invoice.</p>
-          <Link href="/invoices/create" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-all">
-            Create Invoice
-          </Link>
+          <p className="text-white font-semibold mb-1">No companies yet</p>
+          <p className="text-zinc-500 text-sm mb-6">Add your first company to start tracking overdue invoices.</p>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => setIsAddModalOpen(true)}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-all cursor-pointer"
+            >
+              <Plus className="w-4 h-4" /> Add Company
+            </button>
+            <Link
+              href="/invoices/create"
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-semibold transition-all"
+            >
+              Create Invoice
+            </Link>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -81,6 +102,7 @@ export default function CustomersPage() {
               <div className="mb-3">
                 <div className="text-white font-semibold">{co.company_name}</div>
                 <div className="text-zinc-500 text-xs mt-0.5 truncate">{co.company_email}</div>
+                <div className="text-zinc-600 text-xs mt-0.5">{co.company_phone}</div>
               </div>
 
               <div className="flex items-center justify-between pt-3 border-t border-white/8">
@@ -101,6 +123,40 @@ export default function CustomersPage() {
               </div>
             </Link>
           ))}
+        </div>
+      )}
+
+      {/* Add Company Modal */}
+      {isAddModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            onClick={() => setIsAddModalOpen(false)}
+          />
+          <div className="relative w-full max-w-lg rounded-2xl border border-white/10 bg-[#0f1117] shadow-[0_0_60px_rgba(79,70,229,0.2)] overflow-hidden">
+            <div className="h-0.5 w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-indigo-500" />
+            <div className="p-6">
+              <div className="flex items-center justify-between mb-5">
+                <div>
+                  <h3 className="text-lg font-bold text-white">Add Service Provider Company</h3>
+                  <p className="text-zinc-500 text-sm mt-0.5">Register a new client company into the PostgreSQL database.</p>
+                </div>
+                <button
+                  onClick={() => setIsAddModalOpen(false)}
+                  className="w-8 h-8 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 flex items-center justify-center text-zinc-400 hover:text-white transition-all cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <CompanyForm
+                onSuccess={() => {
+                  queryClient.invalidateQueries({ queryKey: ['companies'] });
+                  setIsAddModalOpen(false);
+                }}
+              />
+            </div>
+          </div>
         </div>
       )}
     </div>

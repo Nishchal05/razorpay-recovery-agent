@@ -78,15 +78,15 @@ function CreateCustomerForm({ onSuccess }: { onSuccess: (c: Company) => void }) 
 // ── Customer selector ─────────────────────────────────────────────────────────
 
 function CustomerSelector({
-  value, onChange, companies
+  value, onChange, companies, onOpenCreate
 }: {
   value: Company | null;
   onChange: (c: Company | null) => void;
   companies: Company[];
+  onOpenCreate: () => void;
 }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
-  const [showCreate, setShowCreate] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -109,59 +109,55 @@ function CustomerSelector({
   };
 
   return (
-    <>
-      <div className="relative" ref={ref}>
-        {value ? (
-          <div className="flex items-center justify-between p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/25">
-            <div>
-              <div className="text-white text-sm font-semibold">{value.company_name}</div>
-              <div className="text-indigo-400/70 text-xs">{value.company_email}</div>
-            </div>
-            <button onClick={() => { onChange(null); setQuery(''); }} className="text-zinc-500 hover:text-white text-xs px-2 py-1 rounded-lg hover:bg-white/5 transition-all">Change</button>
+    <div className="relative" ref={ref}>
+      {value ? (
+        <div className="flex items-center justify-between p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/25">
+          <div>
+            <div className="text-white text-sm font-semibold">{value.company_name}</div>
+            <div className="text-indigo-400/70 text-xs">{value.company_email}</div>
           </div>
-        ) : (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
-            <input
-              type="text"
-              placeholder="Search existing customer..."
-              value={query}
-              onChange={e => { setQuery(e.target.value); setOpen(true); }}
-              onFocus={() => setOpen(true)}
-              className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-indigo-500/60 transition-all"
-            />
-          </div>
-        )}
+          <button type="button" onClick={() => { onChange(null); setQuery(''); }} className="text-zinc-500 hover:text-white text-xs px-2 py-1 rounded-lg hover:bg-white/5 transition-all">Change</button>
+        </div>
+      ) : (
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search existing customer..."
+            value={query}
+            onChange={e => { setQuery(e.target.value); setOpen(true); }}
+            onFocus={() => setOpen(true)}
+            className="w-full pl-9 pr-4 py-2.5 rounded-xl bg-white/5 border border-white/10 text-white placeholder-zinc-600 text-sm focus:outline-none focus:border-indigo-500/60 transition-all"
+          />
+        </div>
+      )}
 
-        {open && !value && (
-          <div className="absolute top-full mt-1 left-0 right-0 z-20 rounded-xl border border-white/10 bg-[#0f1117] shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden max-h-56 overflow-y-auto">
-            {filtered.map(c => (
-              <button
-                key={c.company_id}
-                onClick={() => { onChange(c); setQuery(''); setOpen(false); }}
-                className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors text-left"
-              >
-                <div>
-                  <div className="text-white text-sm font-medium">{c.company_name}</div>
-                  <div className="text-zinc-500 text-xs">{c.company_email}</div>
-                </div>
-                {channelIcon(c.preferred_channel)}
-              </button>
-            ))}
+      {open && !value && (
+        <div className="absolute top-full mt-1 left-0 right-0 z-20 rounded-xl border border-white/10 bg-[#0f1117] shadow-[0_8px_32px_rgba(0,0,0,0.6)] overflow-hidden max-h-56 overflow-y-auto">
+          {filtered.map(c => (
             <button
-              onClick={() => { setOpen(false); setShowCreate(true); }}
-              className="w-full flex items-center gap-2 px-4 py-3 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm font-semibold border-t border-white/5"
+              key={c.company_id}
+              type="button"
+              onClick={() => { onChange(c); setQuery(''); setOpen(false); }}
+              className="w-full flex items-center justify-between px-4 py-3 hover:bg-white/5 transition-colors text-left"
             >
-              <PlusCircle className="w-4 h-4" /> Create New Customer
+              <div>
+                <div className="text-white text-sm font-medium">{c.company_name}</div>
+                <div className="text-zinc-500 text-xs">{c.company_email}</div>
+              </div>
+              {channelIcon(c.preferred_channel)}
             </button>
-          </div>
-        )}
-      </div>
-
-      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create New Customer" description="Add a new customer to your account.">
-        <CreateCustomerForm onSuccess={(c) => { onChange(c); setShowCreate(false); }} />
-      </Modal>
-    </>
+          ))}
+          <button
+            type="button"
+            onClick={() => { setOpen(false); onOpenCreate(); }}
+            className="w-full flex items-center gap-2 px-4 py-3 text-indigo-400 hover:bg-indigo-500/10 transition-colors text-sm font-semibold border-t border-white/5"
+          >
+            <PlusCircle className="w-4 h-4" /> Create New Customer
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -227,6 +223,7 @@ export default function CreateInvoicePage() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [customer, setCustomer] = useState<Company | null>(null);
+  const [showCreate, setShowCreate] = useState(false);
   const [form, setForm] = useState({
     invoice_name: '',
     invoice_amount: '',
@@ -298,7 +295,12 @@ export default function CreateInvoicePage() {
             <label className="block text-zinc-300 text-sm font-semibold mb-3">
               <Building2 className="inline w-4 h-4 mr-1.5 -mt-0.5" />Customer
             </label>
-            <CustomerSelector value={customer} onChange={setCustomer} companies={companies} />
+            <CustomerSelector
+              value={customer}
+              onChange={setCustomer}
+              companies={companies}
+              onOpenCreate={() => setShowCreate(true)}
+            />
           </div>
 
           {/* Invoice details */}
@@ -378,6 +380,11 @@ export default function CreateInvoicePage() {
           <InvoicePreview form={form} customer={customer} />
         </div>
       </div>
+
+      {/* Modal for creating a customer placed outside any form tag */}
+      <Modal open={showCreate} onClose={() => setShowCreate(false)} title="Create New Customer" description="Add a new customer to your account.">
+        <CreateCustomerForm onSuccess={(c) => { setCustomer(c); setShowCreate(false); }} />
+      </Modal>
     </div>
   );
 }

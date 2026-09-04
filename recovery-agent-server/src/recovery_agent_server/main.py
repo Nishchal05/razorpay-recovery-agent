@@ -4,15 +4,14 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from .api.auth import router as auth_router
 from .api.company import router as company_router
-from .api.company import client as company_client
 from .api.invoices import router as invoices_router
-from .api.invoices import client as invoices_client
 from .api.gmail import router as gmail_router
 from .database.prisma import client as db_client
 from .agent.due_invoices import check_overdue_invoices
 
-app = FastAPI()
+app = FastAPI(title="Recovery Agent API")
 scheduler = AsyncIOScheduler()
 
 app.add_middleware(
@@ -25,10 +24,6 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup():
-    if not company_client.is_connected():
-        await company_client.connect()
-    if not invoices_client.is_connected():
-        await invoices_client.connect()
     if not db_client.is_connected():
         await db_client.connect()
         
@@ -37,14 +32,11 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    if company_client.is_connected():
-        await company_client.disconnect()
-    if invoices_client.is_connected():
-        await invoices_client.disconnect()
     if db_client.is_connected():
         await db_client.disconnect()
     scheduler.shutdown()
 
+app.include_router(auth_router)
 app.include_router(company_router)
 app.include_router(invoices_router)
 app.include_router(gmail_router)
@@ -52,7 +44,7 @@ app.include_router(gmail_router)
 
 @app.get("/")
 def read_root():
-    return {"Hello": "World"}
+    return {"status": "online", "message": "Recovery Agent Server is running"}
 
 
 @app.get("/test-workflow")
