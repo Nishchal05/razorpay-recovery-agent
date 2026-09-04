@@ -60,6 +60,7 @@ MAX_AUTOMATED_REMINDERS = 3
 # TEMPLATE_MAP has been moved to agent/channels/whatsapp.py
 from .channels.whatsapp import send_whatsapp_message  # noqa: E402
 from .channels.email import send_email_message  # noqa: E402
+from ..services.razorpay_service import generate_payment_link
 
 
 # ============================================================
@@ -342,17 +343,44 @@ Determine the most appropriate recovery action.
 async def create_payment_link(state: RecoveryState):
     invoice = state["invoice"]
 
+    # If the invoice already has a saved payment link in the backend, reuse it!
+    existing_link = invoice.get("payment_link")
+    if existing_link:
+        print(f"[create_payment_link] Reusing saved payment link for invoice {invoice.get('invoice_id')}: {existing_link}")
+        return {"payment_link": existing_link}
+
+    companydetail = state.get("companydetail")
+    customer_name = getattr(companydetail, "company_name", None) if companydetail else None
+    customer_email = getattr(companydetail, "company_email", None) if companydetail else None
+    customer_phone = getattr(companydetail, "company_phone", None) if companydetail else invoice.get("customer_phone", "")
+
     try:
-        # TODO: replace with a real Razorpay Payment Links API call, e.g.
-        # razorpay_client.payment_link.create({
-        #     "amount": int(invoice["invoice_amount"] * 100),  # paise
-        #     "currency": "INR",
-        #     "description": f"Payment for invoice {invoice['invoice_name']}",
-        #     "customer": {"contact": invoice.get("customer_phone", "")},
-        #     "notify": {"sms": False, "email": False},
-        # })
-        payment_link = "https://rzp.io/demo-payment-link"
-        print(f"Creating payment link for invoice {invoice['invoice_id']}")
+        result = await generate_payment_link(
+            amount=invoice["invoice_amount"],
+            description=f"Payment for invoice {invoice['invoice_name']}",
+            customer_name=customer_name,
+            customer_email=customer_email,
+            customer_phone=customer_phone,
+            invoice_id=invoice.get("invoice_id"),
+            invoice_name=invoice.get("invoice_name"),
+        )
+        payment_link = result.get("short_url", "")
+        print(f"[create_payment_link] Generated Razorpay link for invoice {invoice.get('invoice_id')}: {payment_link}")
+
+        # Persist to database so we don't generate it repeatedly
+        inv_id = invoice.get("invoice_id")
+        if inv_id and payment_link:
+            try:
+                await db.invoice.update(
+                    where={"invoice_id": int(inv_id)},
+                    data={
+                        "payment_link": payment_link,
+                        "payment_link_id": result.get("payment_link_id", ""),
+                    }
+                )
+            except Exception as update_err:
+                print(f"[create_payment_link] Failed to persist link: {update_err}")
+
     except Exception as exc:
         print(f"[create_payment_link] failed: {exc}")
         payment_link = ""

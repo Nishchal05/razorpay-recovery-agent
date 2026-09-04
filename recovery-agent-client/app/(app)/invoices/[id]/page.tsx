@@ -210,14 +210,26 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
           {/* Actions */}
           {!invoice.invoice_amount_status && (
-            <div className="flex gap-3 shrink-0">
-              <button
-                onClick={handleGeneratePaymentLink}
-                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white text-sm font-semibold transition-all"
-              >
-                <CreditCard className="w-4 h-4" />
-                Generate Payment Link
-              </button>
+            <div className="flex flex-wrap gap-3 shrink-0">
+              {invoice.payment_link ? (
+                <a
+                  href={invoice.payment_link}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)]"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  Pay via Razorpay
+                </a>
+              ) : (
+                <button
+                  onClick={handleGeneratePaymentLink}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white text-sm font-semibold transition-all"
+                >
+                  <CreditCard className="w-4 h-4" />
+                  Generate Payment Link
+                </button>
+              )}
               <button
                 onClick={() => markPaid()}
                 disabled={markingPaid}

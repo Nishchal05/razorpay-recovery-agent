@@ -20,6 +20,8 @@ export interface Invoice {
   invoice_amount: number | string; // Prisma Decimal serialises as string over JSON
   invoice_amount_status: boolean;
   invoice_status: InvoiceStatus;
+  payment_link?: string;
+  payment_link_id?: string;
   company_id: number;
   company?: Company;
   created_at?: string;

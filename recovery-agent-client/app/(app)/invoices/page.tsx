@@ -112,7 +112,7 @@ export default function InvoicesPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-white/8">
-                {['Invoice', 'Customer', 'Amount', 'Due Date', 'Status', 'Channel'].map((h) => (
+                {['Invoice', 'Customer', 'Amount', 'Due Date', 'Status', 'Payment Link'].map((h) => (
                   <th key={h} className="px-5 py-3.5 text-left text-xs text-zinc-600 font-semibold uppercase tracking-widest">{h}</th>
                 ))}
               </tr>
@@ -135,7 +135,20 @@ export default function InvoicesPage() {
                           {new Date(inv.invoice_due_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
                         </td>
                         <td className="px-5 py-3.5"><StatusBadge invoice={inv} /></td>
-                        <td className="px-5 py-3.5 text-zinc-500 text-xs capitalize">{co?.preferred_channel?.toLowerCase().replace('_', ' ') ?? '—'}</td>
+                        <td className="px-5 py-3.5">
+                          {inv.payment_link ? (
+                            <a
+                              href={inv.payment_link}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 text-indigo-400 text-xs font-semibold transition-all"
+                            >
+                              Pay Link ↗
+                            </a>
+                          ) : (
+                            <span className="text-zinc-600 text-xs">—</span>
+                          )}
+                        </td>
                       </tr>
                     );
                   })}

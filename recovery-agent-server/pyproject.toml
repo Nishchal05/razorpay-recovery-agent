@@ -29,6 +29,7 @@ dependencies = [
     "pyjwt>=2.13.0",
     "bcrypt>=5.0.0",
     "email-validator>=2.3.0",
+    "razorpay>=2.0.1",
 ]
 
 [project.scripts]

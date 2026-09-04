@@ -158,3 +158,88 @@ async def send_whatsapp_template(
 
     message_id: str = data.get("messages", [{}])[0].get("id", "")
     return message_id
+
+
+async def send_whatsapp_text(
+    to_number: str,
+    message_text: str,
+) -> str:
+    """
+    Send a freeform WhatsApp text message via Meta Cloud API.
+
+    Args:
+        to_number: Recipient phone number without leading '+' (e.g. '919876543210').
+        message_text: The text body to send.
+
+    Returns:
+        The Meta message ID string on success.
+    """
+    access_token, phone_number_id = _load_credentials()
+    api_version = os.environ.get("META_API_VERSION", "v25.0")
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to_number,
+        "type": "text",
+        "text": {
+            "preview_url": True,
+            "body": message_text,
+        },
+    }
+
+    url = f"https://graph.facebook.com/{api_version}/{phone_number_id}/messages"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as http:
+            response = await http.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(
+            f"Meta API HTTP {exc.response.status_code}: {exc.response.text}"
+        ) from exc
+    except Exception as exc:
+        raise RuntimeError(f"Meta API call failed: {exc}") from exc
+
+    message_id: str = data.get("messages", [{}])[0].get("id", "")
+    return message_id
+
+
+async def send_invoice_whatsapp(
+    to_number: str,
+    company_name: str,
+    invoice_name: str,
+    invoice_amount: str | float,
+    due_date_str: str,
+    payment_link: str,
+) -> str:
+    """
+    Send an invoice creation notification via WhatsApp.
+    Tries template first (with payment_link/details), falls back to direct text if template doesn't match.
+    """
+    # Clean phone number
+    clean_phone = to_number.removeprefix("whatsapp:").lstrip("+").strip()
+
+    # Try template first
+    try:
+        return await send_whatsapp_template(
+            to_number=clean_phone,
+            message_type="PAYMENT_REMINDER",
+            template_params=[company_name, invoice_name, str(invoice_amount)],
+        )
+    except Exception as template_err:
+        print(f"[whatsapp] Template send failed or not matched, trying text message: {template_err}")
+        # Fallback to direct text with full details and payment link
+        text_message = (
+            f"Hello {company_name},\n\n"
+            f"A new invoice *{invoice_name}* for *₹{float(invoice_amount):,.2f}* has been generated.\n"
+            f"📅 *Due Date:* {due_date_str}\n\n"
+            f"💳 *You can pay securely online here:*\n{payment_link}\n\n"
+            f"Thank you!"
+        )
+        return await send_whatsapp_text(clean_phone, text_message)
+
