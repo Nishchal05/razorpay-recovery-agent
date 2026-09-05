@@ -2,7 +2,11 @@ import os
 from datetime import datetime
 from typing import Optional, Dict, Any
 from .gmail_service import send_email, is_authenticated as is_gmail_authenticated
-from .whatsapp_service import send_invoice_whatsapp, is_configured as is_whatsapp_configured
+from .whatsapp_service import (
+    send_invoice_whatsapp,
+    send_whatsapp_text,
+    is_configured as is_whatsapp_configured,
+)
 
 
 def format_due_date(due_date: Any) -> str:
@@ -154,5 +158,144 @@ async def send_invoice_created_notifications(
             results["whatsapp_error"] = "No customer phone provided"
         elif not is_whatsapp_configured():
             results["whatsapp_error"] = "Meta WhatsApp credentials not configured"
+
+    return results
+
+
+async def send_payment_received_notifications(
+    customer_name: str,
+    customer_email: Optional[str],
+    customer_phone: Optional[str],
+    invoice_name: str,
+    invoice_amount: float | int | str,
+    payment_reference: Optional[str] = None,
+    business_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Dispatch thank-you confirmation with invoice details via both WhatsApp and Gmail upon payment completion.
+    """
+    sender_name = business_name or "Recovery Agent"
+    formatted_amount = f"₹{float(invoice_amount):,.2f}"
+    ref_str = payment_reference or "Razorpay Payment"
+    date_str = datetime.now().strftime("%d %b %Y, %I:%M %p")
+
+    results = {
+        "email_sent": False,
+        "whatsapp_sent": False,
+        "email_error": None,
+        "whatsapp_error": None,
+    }
+
+    # ── 1. Send via Gmail ──────────────────────────────────────────────────────
+    if customer_email and is_gmail_authenticated():
+        subject = f"Payment Receipt — Invoice #{invoice_name} Paid Successfully"
+
+        body_text = (
+            f"Dear {customer_name},\n\n"
+            f"Thank you for your payment! We have successfully received payment for invoice #{invoice_name}.\n\n"
+            f"PAYMENT RECEIPT:\n"
+            f"----------------------------------------\n"
+            f"Invoice Number : {invoice_name}\n"
+            f"Amount Paid    : {formatted_amount}\n"
+            f"Status         : PAID (Completed)\n"
+            f"Date           : {date_str}\n"
+            f"Reference      : {ref_str}\n\n"
+            f"All automated recovery notifications and reminders for this invoice have been closed.\n"
+            f"Thank you for your valued business!\n\n"
+            f"Best regards,\n"
+            f"{sender_name}"
+        )
+
+        body_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <style>
+            body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0a0a0a; color: #ffffff; padding: 24px; margin: 0; }}
+            .card {{ max-width: 520px; margin: 0 auto; background: #0f1117; border: 1px solid rgba(16,185,129,0.3); border-radius: 16px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.5); }}
+            .header-bar {{ height: 4px; background: linear-gradient(90deg, #10b981, #059669, #34d399); }}
+            .content {{ padding: 32px; }}
+            .badge {{ display: inline-block; padding: 6px 14px; border-radius: 999px; background: rgba(16,185,129,0.15); color: #34d399; font-size: 13px; font-weight: 700; margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.5px; }}
+            h2 {{ margin: 0 0 8px 0; color: #ffffff; font-size: 24px; font-weight: 700; }}
+            p {{ color: #a1a1aa; font-size: 14px; line-height: 1.6; margin: 0 0 20px 0; }}
+            .details-box {{ background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 12px; padding: 20px; margin-bottom: 24px; }}
+            .row {{ display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 14px; }}
+            .row:last-child {{ margin-bottom: 0; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.08); }}
+            .label {{ color: #71717a; }}
+            .val {{ color: #ffffff; font-weight: 600; text-align: right; }}
+            .amount {{ font-size: 22px; color: #34d399; font-weight: 700; }}
+            .status-tag {{ color: #34d399; font-weight: 700; }}
+            .footer {{ text-align: center; margin-top: 24px; font-size: 12px; color: #52525b; }}
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <div class="header-bar"></div>
+            <div class="content">
+              <span class="badge">Payment Received ✓</span>
+              <h2>Thank You for Your Payment!</h2>
+              <p>Hello <strong>{customer_name}</strong>, your payment for invoice <strong>#{invoice_name}</strong> has been confirmed.</p>
+              
+              <div class="details-box">
+                <div class="row">
+                  <span class="label">Invoice:</span>
+                  <span class="val">#{invoice_name}</span>
+                </div>
+                <div class="row">
+                  <span class="label">Payment Date:</span>
+                  <span class="val">{date_str}</span>
+                </div>
+                <div class="row">
+                  <span class="label">Reference:</span>
+                  <span class="val">{ref_str}</span>
+                </div>
+                <div class="row">
+                  <span class="label">Status:</span>
+                  <span class="val status-tag">PAID</span>
+                </div>
+                <div class="row">
+                  <span class="label">Total Amount Paid:</span>
+                  <span class="val amount">{formatted_amount}</span>
+                </div>
+              </div>
+
+              <p style="margin-top: 16px; font-size: 13px; color: #71717a; text-align: center;">All pending reminders for this invoice have been resolved.</p>
+            </div>
+          </div>
+          <div class="footer">Automated Payment Receipt • Recovery Agent</div>
+        </body>
+        </html>
+        """
+
+        try:
+            send_email(to=customer_email, subject=subject, body_text=body_text, body_html=body_html)
+            results["email_sent"] = True
+            print(f"[notifications] Thank-you payment email sent to {customer_email} for invoice {invoice_name}")
+        except Exception as exc:
+            results["email_error"] = str(exc)
+            print(f"[notifications] Thank-you payment email failed: {exc}")
+
+    # ── 2. Send via WhatsApp ───────────────────────────────────────────────────
+    if customer_phone and is_whatsapp_configured():
+        whatsapp_body = (
+            f"✅ *Payment Received — Thank You!*\n\n"
+            f"Dear *{customer_name}*,\n\n"
+            f"We have successfully received your payment for invoice *{invoice_name}*.\n\n"
+            f"📋 *Payment Summary:*\n"
+            f"• Invoice: *{invoice_name}*\n"
+            f"• Amount Paid: *{formatted_amount}*\n"
+            f"• Status: *PAID (Completed)*\n"
+            f"• Date: *{date_str}*\n"
+            f"• Reference: *{ref_str}*\n\n"
+            f"All reminders for this invoice are now closed. Thank you for your business! 🙏"
+        )
+        try:
+            msg_id = await send_whatsapp_text(to_number=customer_phone, message_text=whatsapp_body)
+            results["whatsapp_sent"] = True
+            print(f"[notifications] Thank-you payment WhatsApp sent (ID: {msg_id}) to {customer_phone}")
+        except Exception as exc:
+            results["whatsapp_error"] = str(exc)
+            print(f"[notifications] Thank-you payment WhatsApp failed: {exc}")
 
     return results

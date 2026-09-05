@@ -1,7 +1,7 @@
 [project]
 name = "recovery-agent-server"
-version = "0.1.0"
-description = "Add your description here"
+version = "1.0.0"
+description = "Autonomous Multi-Channel AI Debt Recovery & Dispute Resolution Platform powered by Razorpay"
 readme = "README.md"
 authors = [
     { name = "nishchal05", email = "nishchalsundan04@gmail.com" }

@@ -49,6 +49,13 @@ from ..services.inbound_service import (
     resolve_invoice_by_phone,
     resolve_invoice_by_email,
 )
+from ..services.razorpay_service import (
+    fetch_payment_link,
+    verify_webhook_signature as verify_razorpay_signature,
+)
+from ..services.notification_service import (
+    send_payment_received_notifications,
+)
 
 router = APIRouter(prefix="/api/recovery", tags=["Recovery & Voice Agent"])
 
@@ -497,6 +504,185 @@ async def elevenlabs_webhook(
             )
 
     return {"status": "success"}
+
+
+# ============================================================
+# 5.5 RAZORPAY WEBHOOK & PAYMENT RECONCILIATION
+# ============================================================
+
+async def reconcile_active_payment_links() -> list:
+    """
+    Check Razorpay API for all unpaid invoices with payment links.
+    Automatically marks invoice as PAID when Razorpay reports paid and dispatches receipts.
+    """
+    if not db.is_connected():
+        await db.connect()
+
+    unpaid_invoices = await db.invoice.find_many(
+        where={
+            "invoice_status": {"not": "PAID"},
+            "payment_link_id": {"not": None},
+        },
+        include={"company": True},
+    )
+
+    updated = []
+    for inv in unpaid_invoices:
+        if not inv.payment_link_id:
+            continue
+        try:
+            rzp_data = await fetch_payment_link(inv.payment_link_id)
+            status_from_rzp = rzp_data.get("status", "").lower()
+            if status_from_rzp == "paid":
+                await db.invoice.update(
+                    where={"invoice_id": inv.invoice_id},
+                    data={
+                        "invoice_amount_status": True,
+                        "invoice_status": "PAID",
+                        "recovery_status": "PAID",
+                    },
+                )
+                print(f"[reconcile_payments] Invoice {inv.invoice_name} (ID: {inv.invoice_id}) verified as PAID on Razorpay!")
+                if inv.company:
+                    try:
+                        await send_payment_received_notifications(
+                            customer_name=inv.company.company_name,
+                            customer_email=inv.company.company_email,
+                            customer_phone=inv.company.company_phone,
+                            invoice_name=inv.invoice_name,
+                            invoice_amount=float(inv.invoice_amount),
+                            payment_reference=inv.payment_link_id or "Razorpay Payment",
+                        )
+                    except Exception as notif_err:
+                        print(f"[reconcile_payments] Error sending payment notifications: {notif_err}")
+                updated.append(inv.invoice_name)
+        except Exception as e:
+            pass
+
+    return updated
+
+
+@router.post("/invoices/{invoice_id}/verify-payment")
+async def verify_invoice_payment(invoice_id: int):
+    """
+    Verify single invoice status directly against Razorpay payment link.
+    Immediately marks PAID if payment link has been settled and sends thank-you receipt.
+    """
+    if not db.is_connected():
+        await db.connect()
+
+    invoice = await db.invoice.find_unique(
+        where={"invoice_id": invoice_id},
+        include={"company": True},
+    )
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    if invoice.invoice_amount_status or invoice.invoice_status == "PAID":
+        return {"status": "PAID", "message": "Invoice is already marked as paid"}
+
+    if not invoice.payment_link_id:
+        return {"status": invoice.invoice_status, "message": "Invoice has no Razorpay payment link"}
+
+    rzp_data = await fetch_payment_link(invoice.payment_link_id)
+    rzp_status = rzp_data.get("status", "").lower()
+    
+    if rzp_status == "paid":
+        await db.invoice.update(
+            where={"invoice_id": invoice_id},
+            data={
+                "invoice_amount_status": True,
+                "invoice_status": "PAID",
+                "recovery_status": "PAID",
+            },
+        )
+        if invoice.company:
+            try:
+                await send_payment_received_notifications(
+                    customer_name=invoice.company.company_name,
+                    customer_email=invoice.company.company_email,
+                    customer_phone=invoice.company.company_phone,
+                    invoice_name=invoice.invoice_name,
+                    invoice_amount=float(invoice.invoice_amount),
+                    payment_reference=invoice.payment_link_id or "Razorpay Verified",
+                )
+            except Exception as notif_err:
+                print(f"[verify_payment] Error sending payment notifications: {notif_err}")
+        return {"status": "PAID", "verified": True, "message": "Payment verified on Razorpay! Invoice marked PAID."}
+
+    return {"status": invoice.invoice_status, "razorpay_status": rzp_status, "verified": False}
+
+
+@router.post("/webhooks/razorpay")
+async def razorpay_webhook(
+    request: Request,
+    x_razorpay_signature: Optional[str] = Header(None, alias="X-Razorpay-Signature"),
+):
+    """
+    Instant webhook from Razorpay for payment events:
+    - payment_link.paid
+    - payment.captured
+    Automatically updates invoice from unpaid to PAID and sends thank-you notifications.
+    """
+    raw_body = await request.body()
+    webhook_secret = os.getenv("RAZORPAY_WEBHOOK_SECRET", "").strip()
+
+    if webhook_secret and x_razorpay_signature:
+        if not verify_razorpay_signature(raw_body, x_razorpay_signature):
+            raise HTTPException(status_code=401, detail="Invalid Razorpay webhook signature")
+
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "ignored"}
+
+    event = payload.get("event", "")
+    print(f"[razorpay_webhook] Received event: {event}")
+
+    if not db.is_connected():
+        await db.connect()
+
+    plink_id = payload.get("payload", {}).get("payment_link", {}).get("entity", {}).get("id")
+    payment_notes = payload.get("payload", {}).get("payment", {}).get("entity", {}).get("notes", {})
+    invoice_id_note = payment_notes.get("invoice_id")
+    invoice_name_note = payment_notes.get("invoice_name")
+
+    invoice = None
+    if plink_id:
+        invoice = await db.invoice.find_first(where={"payment_link_id": plink_id}, include={"company": True})
+    if not invoice and invoice_id_note:
+        try:
+            invoice = await db.invoice.find_unique(where={"invoice_id": int(invoice_id_note)}, include={"company": True})
+        except Exception:
+            pass
+    if not invoice and invoice_name_note:
+        invoice = await db.invoice.find_first(where={"invoice_name": str(invoice_name_note)}, include={"company": True})
+
+    if invoice:
+        await db.invoice.update(
+            where={"invoice_id": invoice.invoice_id},
+            data={
+                "invoice_amount_status": True,
+                "invoice_status": "PAID",
+                "recovery_status": "PAID",
+            },
+        )
+        print(f"[razorpay_webhook] Successfully updated invoice {invoice.invoice_name} to PAID!")
+        if invoice.company:
+            try:
+                await send_payment_received_notifications(
+                    customer_name=invoice.company.company_name,
+                    customer_email=invoice.company.company_email,
+                    customer_phone=invoice.company.company_phone,
+                    invoice_name=invoice.invoice_name,
+                    invoice_amount=float(invoice.invoice_amount),
+                    payment_reference=plink_id or "Razorpay Webhook",
+                )
+            except Exception as notif_err:
+                print(f"[razorpay_webhook] Error sending payment notifications: {notif_err}")
+        return {"status": "success", "invoice": invoice.invoice_name, "updated": "PAID"}
+
+    return {"status": "ignored_no_invoice"}
 
 
 # ============================================================

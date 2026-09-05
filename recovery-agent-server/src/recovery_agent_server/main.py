@@ -41,6 +41,16 @@ async def startup():
             print(f"[scheduler/email_sync] {e}")
 
     scheduler.add_job(_safe_sync_emails, 'interval', minutes=2)
+
+    # Automatically reconcile active Razorpay payment links every 1 minute
+    async def _safe_reconcile_payments():
+        try:
+            from .api.recovery import reconcile_active_payment_links
+            await reconcile_active_payment_links()
+        except Exception as e:
+            print(f"[scheduler/payment_reconcile] {e}")
+
+    scheduler.add_job(_safe_reconcile_payments, 'interval', minutes=1)
     scheduler.start()
 
 @app.on_event("shutdown")

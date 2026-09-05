@@ -13,3 +13,4 @@ wheels/
 .env.local
 *_token.json
 gmail_token.json
+processed_gmail_ids.json
