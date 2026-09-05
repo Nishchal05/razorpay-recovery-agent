@@ -774,8 +774,7 @@ Built for **Razorpay Buildathon 2026**.
 
 ------------------------------------------------------------------------
 
-::: {align="center"}
 ### 💳 Recover smarter. Communicate better. Get paid faster.
 
 **An AI agent for the last mile of the payment lifecycle.**
-:::
+
