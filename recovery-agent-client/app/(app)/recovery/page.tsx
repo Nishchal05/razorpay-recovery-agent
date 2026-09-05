@@ -6,7 +6,7 @@ import { getCompanies } from '../../../lib/api/companies';
 import { Invoice, Company } from '../../../lib/types';
 import { ActivityTimeline } from '../../../components/dashboard/ActivityTimeline';
 import { ActivityEvent, ActivityType } from '../../../lib/types';
-import { BrainCircuit, AlertTriangle, CheckCircle2, Clock, MessageCircle, Mail } from 'lucide-react';
+import { BrainCircuit, AlertTriangle, CheckCircle2, Clock, MessageCircle, Mail, PhoneCall } from 'lucide-react';
 
 function isOverdue(inv: Invoice) {
   return !inv.invoice_amount_status && new Date(inv.invoice_due_date) < new Date();
@@ -19,8 +19,9 @@ function deriveActivity(invoices: Invoice[], companies: Company[]): ActivityEven
     const ch = co?.preferred_channel ?? 'WHATSAPP';
     let type: ActivityType;
     if (inv.invoice_amount_status) type = 'PAID';
-    else if (inv.invoice_status === 'DISPUTE') type = 'ESCALATED';
-    else if (isOverdue(inv)) type = ch === 'EMAIL' ? 'EMAIL_SENT' : 'WHATSAPP_SENT';
+    else if (inv.recovery_status === 'NEEDS_HUMAN_INTERVENTION' || inv.invoice_status === 'DISPUTE') type = 'ESCALATED';
+    else if (inv.recovery_status === 'PROMISE_TO_PAY') type = 'PROMISE_RECEIVED';
+    else if (isOverdue(inv)) type = ch === 'EMAIL' ? 'EMAIL_SENT' : ch === 'VOICE_CALL' ? 'CALL_INITIATED' : 'WHATSAPP_SENT';
     else type = 'OVERDUE_DETECTED';
     return {
       id: inv.invoice_id,
@@ -92,10 +93,14 @@ export default function RecoveryPage() {
                         <CheckCircle2 className="w-3.5 h-3.5 text-indigo-400 shrink-0" /> Customer history retrieved
                       </div>
                       <div className="flex items-center gap-2 text-xs text-white font-medium">
-                        {ch === 'EMAIL'
-                          ? <Mail className="w-3.5 h-3.5 text-blue-400 shrink-0" />
-                          : <MessageCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />}
-                        {ch === 'EMAIL' ? 'Email' : 'WhatsApp'} reminder sent
+                        {ch === 'EMAIL' ? (
+                          <Mail className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                        ) : ch === 'VOICE_CALL' ? (
+                          <PhoneCall className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                        ) : (
+                          <MessageCircle className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                        )}
+                        {ch === 'EMAIL' ? 'Email' : ch === 'VOICE_CALL' ? 'Voice call (JEA)' : 'WhatsApp'} reminder sent
                       </div>
                       <div className="flex items-center gap-2 text-xs text-zinc-500">
                         <Clock className="w-3.5 h-3.5 text-zinc-600 shrink-0" /> Waiting for customer response...

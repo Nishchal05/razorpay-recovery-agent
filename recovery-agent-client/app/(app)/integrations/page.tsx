@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { MessageCircle, Mail, CreditCard, CheckCircle2, ExternalLink, AlertCircle, Info, X } from 'lucide-react';
+import { MessageCircle, Mail, CreditCard, CheckCircle2, ExternalLink, AlertCircle, Info, X, PhoneCall } from 'lucide-react';
 import { useToast } from '../../../components/ui/Toast';
 
 function InfoBanner({ message, onClose }: { message: string; onClose: () => void }) {
@@ -92,9 +92,16 @@ export default function IntegrationsPage() {
     );
   };
 
+  const showElevenLabsInfo = () => {
+    setInfoBanner(
+      'To enable ElevenLabs Voice Agent (JEA), set ELEVENLABS_API_KEY and ELEVENLABS_AGENT_ID in your server .env file, then restart the server.'
+    );
+  };
+
   const envConfig = {
     whatsapp: Boolean(process.env.NEXT_PUBLIC_META_CONFIGURED),
     razorpay: Boolean(process.env.NEXT_PUBLIC_RAZORPAY_CONFIGURED),
+    elevenlabs: Boolean(process.env.NEXT_PUBLIC_ELEVENLABS_CONFIGURED),
   };
 
   return (
@@ -110,7 +117,17 @@ export default function IntegrationsPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-4">
+        <IntegrationCard
+          title="Voice Agent JEA (ElevenLabs)"
+          description="Autonomous Conversational AI voice agent that calls customers, negotiates promises-to-pay, and handles inquiries."
+          icon={PhoneCall}
+          color="bg-purple-500/10 border-purple-500/20 text-purple-400"
+          connected={envConfig.elevenlabs}
+          label={envConfig.elevenlabs ? 'Configured' : 'Setup ElevenLabs'}
+          onConnect={showElevenLabsInfo}
+        />
+
         <IntegrationCard
           title="WhatsApp (Meta)"
           description="Send personalized payment reminders directly through WhatsApp Business API."

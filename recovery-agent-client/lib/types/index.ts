@@ -13,6 +13,21 @@ export interface Company {
 
 export type InvoiceStatus = 'PENDING' | 'DISPUTE' | 'PAID';
 
+export interface CallLog {
+  id: number;
+  invoice_id: number;
+  company_id?: number;
+  channel: string;
+  provider: string;
+  call_sid?: string;
+  status: string;
+  transcript?: string;
+  summary?: string;
+  outcome?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface Invoice {
   invoice_id: number;
   invoice_name: string;
@@ -22,6 +37,11 @@ export interface Invoice {
   invoice_status: InvoiceStatus;
   payment_link?: string;
   payment_link_id?: string;
+  recovery_status?: string;
+  promised_date?: string;
+  human_intervention_reason?: string;
+  customer_statement?: string;
+  calls?: CallLog[];
   company_id: number;
   company?: Company;
   created_at?: string;
@@ -72,6 +92,10 @@ export interface KpiStats {
 export type ActivityType =
   | 'WHATSAPP_SENT'
   | 'EMAIL_SENT'
+  | 'CALL_INITIATED'
+  | 'CALL_CONNECTED'
+  | 'CALL_COMPLETED'
+  | 'CALL_FAILED'
   | 'PAYMENT_LINK_CREATED'
   | 'PROMISE_RECEIVED'
   | 'ESCALATED'

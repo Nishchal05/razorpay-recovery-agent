@@ -56,10 +56,13 @@ from ..database.prisma import client as db
 
 MAX_AUTOMATED_REMINDERS = 3
 
+from datetime import datetime, date
+
 # Channel node imports
 # TEMPLATE_MAP has been moved to agent/channels/whatsapp.py
 from .channels.whatsapp import send_whatsapp_message  # noqa: E402
 from .channels.email import send_email_message  # noqa: E402
+from .channels.voice import call_voice_agent  # noqa: E402
 from ..services.razorpay_service import generate_payment_link
 
 
@@ -131,6 +134,9 @@ class RecoveryState(TypedDict):
     payment_link: str
     whatsapp_sid: str               # set when preferred_channel == "whatsapp"
     email_sid: str                  # set when preferred_channel == "email"
+    voice_sid: str                  # set when preferred_channel == "voice"
+    call_status: str
+    recovery_status: str
 
 
 # ============================================================
@@ -213,6 +219,56 @@ agent = _prompt | llm.with_structured_output(RecoveryDecision)
 # ============================================================
 
 async def get_context(state: RecoveryState):
+    invoice = state.get("invoice", {})
+
+    # GUARDRAIL 1: If invoice is already paid, stop all recovery
+    if invoice.get("invoice_amount_status") or invoice.get("invoice_status") == "PAID":
+        print(f"[get_context] Invoice {state['invoice_id']} is already PAID. Stopping recovery.")
+        return {
+            "conversation": "",
+            "reminder_count": 0,
+            "send_message": False,
+            "human_intervention": False,
+            "reason": "Invoice is already paid — no recovery action required.",
+        }
+
+    # GUARDRAIL 2: If case is marked for human intervention, do not send automated reminders
+    rec_status = invoice.get("recovery_status")
+    if rec_status == "NEEDS_HUMAN_INTERVENTION":
+        print(f"[get_context] Invoice {state['invoice_id']} requires human review. Halting automation.")
+        return {
+            "conversation": "",
+            "reminder_count": 0,
+            "send_message": False,
+            "human_intervention": True,
+            "reason": invoice.get("human_intervention_reason") or "Case requires human intervention.",
+        }
+
+    # GUARDRAIL 3: If customer made a promise and promised_date is in the future, WAIT
+    promised_date = invoice.get("promised_date")
+    if rec_status == "PROMISE_TO_PAY" and promised_date:
+        try:
+            if isinstance(promised_date, str):
+                clean_pdate = promised_date.replace("Z", "+00:00")
+                parsed_pdate = datetime.fromisoformat(clean_pdate).date()
+            elif hasattr(promised_date, "date"):
+                parsed_pdate = promised_date.date()
+            else:
+                parsed_pdate = promised_date
+
+            today = date.today()
+            if parsed_pdate > today:
+                print(f"[get_context] Invoice {state['invoice_id']} has active promise for {parsed_pdate} (today is {today}). Waiting.")
+                return {
+                    "conversation": "",
+                    "reminder_count": 0,
+                    "send_message": False,
+                    "human_intervention": False,
+                    "reason": f"Waiting for promised payment date: {parsed_pdate}.",
+                }
+        except Exception as p_err:
+            print(f"[get_context] Error parsing promised date: {p_err}")
+
     try:
         messages = await db.message.find_many(
             where={"invoice_id": state["invoice_id"]},
@@ -270,6 +326,26 @@ async def get_company_history(state: RecoveryState):
 # ============================================================
 
 async def decision_agent(state: RecoveryState):
+    # Guardrail check from context: if already decided to wait or stop
+    if state.get("send_message") is False and not state.get("human_intervention"):
+        return {
+            "send_message": False,
+            "create_payment_link": False,
+            "human_intervention": False,
+            "message_type": "GENERAL_FOLLOWUP",
+            "promise_to_pay_date": None,
+            "reason": state.get("reason", "Waiting / No automated reminder needed."),
+        }
+
+    if state.get("human_intervention") and not state.get("send_message"):
+        return {
+            "send_message": False,
+            "create_payment_link": False,
+            "human_intervention": True,
+            "message_type": "GENERAL_FOLLOWUP",
+            "promise_to_pay_date": None,
+            "reason": state.get("reason", "Case requires human intervention."),
+        }
     try:
         decision = await agent.ainvoke(
             {
@@ -403,18 +479,16 @@ async def human_review(state: RecoveryState):
     print("Reason:", state["reason"])
 
     try:
-        # TODO: replace `escalation` with your actual Prisma model name.
-        await db.escalation.create(
+        await db.invoice.update(
+            where={"invoice_id": state["invoice_id"]},
             data={
-                "invoice_id": state["invoice_id"],
-                "reason": state["reason"],
-                "promise_to_pay_date": state.get("promise_to_pay_date"),
+                "recovery_status": "NEEDS_HUMAN_INTERVENTION",
+                "human_intervention_reason": state.get("reason", "Escalated by AI recovery agent"),
             }
         )
     except Exception as exc:
-        print(f"[human_review] failed to persist escalation: {exc}")
+        print(f"[human_review] failed to update invoice status: {exc}")
 
-    # TODO: notify finance team (Slack/email webhook) here.
     return {}
 
 
@@ -423,32 +497,39 @@ async def human_review(state: RecoveryState):
 # ============================================================
 
 def _resolve_channel(state: RecoveryState) -> str:
-    """Return the normalised channel string ("email" or "whatsapp").
+    """Return the normalised channel string ("email", "whatsapp", or "voice").
 
     Priority:
       1. state["preferred_channel"]  — written by get_company_history from the DB
       2. companydetail.preferred_channel — direct attribute fallback
-      3. "whatsapp" — hardcoded default
+      3. "whatsapp" — default
     """
     channel = state.get("preferred_channel") or ""
     if not channel:
         companydetail = state.get("companydetail")
         channel = getattr(companydetail, "preferred_channel", None) or "whatsapp"
-    return channel.lower()
+    norm = str(channel).lower().replace("-", "_")
+    if norm in ("voice", "voice_call", "voicecall"):
+        return "voice"
+    if norm in ("email", "gmail"):
+        return "email"
+    return "whatsapp"
 
 
 def route_decision(state: RecoveryState):
-    if state["human_intervention"]:
+    if state.get("human_intervention"):
         return "human_review"
 
-    if state["create_payment_link"] and state["send_message"]:
+    if state.get("create_payment_link") and state.get("send_message"):
         return "create_payment_link"
 
-    if state["send_message"]:
+    if state.get("send_message"):
         channel = _resolve_channel(state)
         print(f"[router] preferred_channel resolved to '{channel}'")
         if channel == "email":
             return "send_email_message"
+        if channel == "voice":
+            return "call_voice_agent"
         return "send_whatsapp_message"
 
     return END
@@ -466,6 +547,7 @@ graph.add_node("decision_agent", decision_agent)
 graph.add_node("create_payment_link", create_payment_link)
 graph.add_node("send_whatsapp_message", send_whatsapp_message)
 graph.add_node("send_email_message", send_email_message)
+graph.add_node("call_voice_agent", call_voice_agent)
 graph.add_node("human_review", human_review)
 
 graph.add_edge(START, "get_context")
@@ -482,17 +564,20 @@ graph.add_conditional_edges(
         "create_payment_link": "create_payment_link",
         "send_whatsapp_message": "send_whatsapp_message",
         "send_email_message": "send_email_message",
+        "call_voice_agent": "call_voice_agent",
         END: END,
     },
 )
 
 # After creating a payment link, send via whichever channel was requested.
-# The create_payment_link node runs first; route_decision already decided the
-# channel, so we need a second per-channel fan-out from create_payment_link.
 def route_after_payment_link(state: RecoveryState):
     channel = _resolve_channel(state)
     print(f"[router/payment_link] preferred_channel resolved to '{channel}'")
-    return "send_email_message" if channel == "email" else "send_whatsapp_message"
+    if channel == "email":
+        return "send_email_message"
+    if channel == "voice":
+        return "call_voice_agent"
+    return "send_whatsapp_message"
 
 graph.add_conditional_edges(
     "create_payment_link",
@@ -500,11 +585,13 @@ graph.add_conditional_edges(
     {
         "send_whatsapp_message": "send_whatsapp_message",
         "send_email_message": "send_email_message",
+        "call_voice_agent": "call_voice_agent",
     },
 )
 
 graph.add_edge("send_whatsapp_message", END)
 graph.add_edge("send_email_message", END)
+graph.add_edge("call_voice_agent", END)
 graph.add_edge("human_review", END)
 
 recovery_graph = graph.compile()

@@ -23,7 +23,7 @@ Environment variables optional:
 from __future__ import annotations
 
 import os
-from typing import Literal
+from typing import Literal, Optional, Any
 
 import httpx
 
@@ -37,6 +37,7 @@ MessageType = Literal[
     "PROMISE_FOLLOWUP",
     "OVERDUE_REMINDER",
     "GENERAL_FOLLOWUP",
+    "INVOICE_PAYMENT",
 ]
 
 TEMPLATE_MAP: dict[str, str] = {
@@ -51,6 +52,9 @@ TEMPLATE_MAP: dict[str, str] = {
     ),
     "GENERAL_FOLLOWUP": os.environ.get(
         "WA_TEMPLATE_GENERAL_FOLLOWUP", "jaspers_market_order_confirmation_v1"
+    ),
+    "INVOICE_PAYMENT": os.environ.get(
+        "WA_TEMPLATE_INVOICE_PAYMENT", "invoice_payment"
     ),
 }
 
@@ -83,12 +87,24 @@ def is_configured() -> bool:
     )
 
 
+def normalize_phone_for_meta(phone: str, default_country_code: str = "91") -> str:
+    """
+    Normalize phone number to Meta's expected E.164 format without '+'.
+    If a 10-digit Indian number is provided without country code, automatically prepends '91'.
+    """
+    digits = "".join(filter(str.isdigit, str(phone).strip()))
+    if len(digits) == 10:
+        return f"{default_country_code}{digits}"
+    return digits
+
+
 # ── Public API ─────────────────────────────────────────────────────────────────
 
 async def send_whatsapp_template(
     to_number: str,
     message_type: MessageType,
     template_params: list[str],
+    button_param: Optional[str] = None,
 ) -> str:
     """
     Send a WhatsApp template message via the Meta Cloud API.
@@ -96,10 +112,10 @@ async def send_whatsapp_template(
     Args:
         to_number:       Recipient phone number in E.164 format, without the
                          leading ``+`` (e.g. ``919781085012``).
-        message_type:    One of the four recovery message types — used to look
-                         up the approved template name.
+        message_type:    One of the recovery message types or INVOICE_PAYMENT.
         template_params: Ordered list of body parameter values that fill the
                          ``{{1}}``, ``{{2}}``, … placeholders in the template.
+        button_param:    Optional dynamic URL slug for the template button.
 
     Returns:
         The Meta message ID string on success.
@@ -120,6 +136,25 @@ async def send_whatsapp_template(
     api_version = os.environ.get("META_API_VERSION", "v25.0")
     lang_code = os.environ.get("WA_TEMPLATE_LANG", "en_US")
 
+    components: list[dict[str, Any]] = [
+        {
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": str(p)} for p in template_params
+            ],
+        }
+    ]
+
+    if button_param:
+        components.append({
+            "type": "button",
+            "sub_type": "url",
+            "index": "0",
+            "parameters": [
+                {"type": "text", "text": str(button_param)}
+            ],
+        })
+
     payload = {
         "messaging_product": "whatsapp",
         "to": to_number,
@@ -127,14 +162,7 @@ async def send_whatsapp_template(
         "template": {
             "name": template_name,
             "language": {"code": lang_code},
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": p} for p in template_params
-                    ],
-                }
-            ],
+            "components": components,
         },
     }
 
@@ -168,7 +196,7 @@ async def send_whatsapp_text(
     Send a freeform WhatsApp text message via Meta Cloud API.
 
     Args:
-        to_number: Recipient phone number without leading '+' (e.g. '919876543210').
+        to_number: Recipient phone number with or without '+' / country code.
         message_text: The text body to send.
 
     Returns:
@@ -176,10 +204,11 @@ async def send_whatsapp_text(
     """
     access_token, phone_number_id = _load_credentials()
     api_version = os.environ.get("META_API_VERSION", "v25.0")
+    recipient = normalize_phone_for_meta(to_number)
 
     payload = {
         "messaging_product": "whatsapp",
-        "to": to_number,
+        "to": recipient,
         "type": "text",
         "text": {
             "preview_url": True,
@@ -221,25 +250,41 @@ async def send_invoice_whatsapp(
     Send an invoice creation notification via WhatsApp.
     Tries template first (with payment_link/details), falls back to direct text if template doesn't match.
     """
-    # Clean phone number
-    clean_phone = to_number.removeprefix("whatsapp:").lstrip("+").strip()
+    recipient = normalize_phone_for_meta(to_number)
 
-    # Try template first
+    # Format amount with rupee symbol e.g. ₹15,000 or ₹15,000.00
+    try:
+        amt_num = float(str(invoice_amount).replace(",", "").replace("₹", ""))
+        amt_str = f"₹{amt_num:,.2f}"
+    except Exception:
+        amt_str = f"₹{invoice_amount}"
+
+    # Extract dynamic slug for the button from payment_link
+    # e.g., if link is https://rzp.io/rzp/EyQvTbU and button is https://rzp.io/rzp/{{1}}, slug is EyQvTbU
+    # if button is https://rzp.io/{{1}}, slug is rzp/EyQvTbU
+    button_slug = payment_link.strip()
+    prefix = os.environ.get("WA_BUTTON_URL_PREFIX", "https://rzp.io/rzp/").strip()
+    if prefix and button_slug.startswith(prefix):
+        button_slug = button_slug[len(prefix):]
+    elif button_slug.startswith("https://rzp.io/"):
+        button_slug = button_slug[len("https://rzp.io/"):]
+
+    # Try approved template first
     try:
         return await send_whatsapp_template(
-            to_number=clean_phone,
-            message_type="PAYMENT_REMINDER",
-            template_params=[company_name, invoice_name, str(invoice_amount)],
+            to_number=recipient,
+            message_type="INVOICE_PAYMENT",
+            template_params=[company_name, invoice_name, amt_str, due_date_str],
+            button_param=button_slug if button_slug else None,
         )
     except Exception as template_err:
-        print(f"[whatsapp] Template send failed or not matched, trying text message: {template_err}")
-        # Fallback to direct text with full details and payment link
+        print(f"[whatsapp] Template 'invoice_payment' failed or in review: {template_err}")
+        print("[whatsapp] Falling back to direct text message...")
         text_message = (
             f"Hello {company_name},\n\n"
-            f"A new invoice *{invoice_name}* for *₹{float(invoice_amount):,.2f}* has been generated.\n"
+            f"A new invoice *{invoice_name}* for *{amt_str}* has been generated.\n"
             f"📅 *Due Date:* {due_date_str}\n\n"
             f"💳 *You can pay securely online here:*\n{payment_link}\n\n"
             f"Thank you!"
         )
-        return await send_whatsapp_text(clean_phone, text_message)
-
+        return await send_whatsapp_text(recipient, text_message)

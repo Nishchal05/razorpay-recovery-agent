@@ -8,6 +8,7 @@ from .api.auth import router as auth_router
 from .api.company import router as company_router
 from .api.invoices import router as invoices_router
 from .api.gmail import router as gmail_router
+from .api.recovery import router as recovery_router
 from .database.prisma import client as db_client
 from .agent.due_invoices import check_overdue_invoices
 
@@ -40,6 +41,7 @@ app.include_router(auth_router)
 app.include_router(company_router)
 app.include_router(invoices_router)
 app.include_router(gmail_router)
+app.include_router(recovery_router)
 
 
 @app.get("/")

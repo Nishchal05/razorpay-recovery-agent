@@ -8,12 +8,37 @@ import {
   CheckCircle2,
   AlertTriangle,
   XCircle,
+  PhoneCall,
 } from 'lucide-react';
 
 const TYPE_CONFIG: Record<
   ActivityType,
   { icon: React.ElementType; label: string; color: string; bg: string }
 > = {
+  CALL_INITIATED: {
+    icon: PhoneCall,
+    label: 'Voice call initiated (JEA)',
+    color: 'text-purple-400',
+    bg: 'bg-purple-500/10 border-purple-500/20',
+  },
+  CALL_CONNECTED: {
+    icon: PhoneCall,
+    label: 'Voice call connected',
+    color: 'text-emerald-400',
+    bg: 'bg-emerald-500/10 border-emerald-500/20',
+  },
+  CALL_COMPLETED: {
+    icon: PhoneCall,
+    label: 'Voice call completed',
+    color: 'text-indigo-400',
+    bg: 'bg-indigo-500/10 border-indigo-500/20',
+  },
+  CALL_FAILED: {
+    icon: PhoneCall,
+    label: 'Voice call failed',
+    color: 'text-rose-400',
+    bg: 'bg-rose-500/10 border-rose-500/20',
+  },
   WHATSAPP_SENT: {
     icon: MessageCircle,
     label: 'WhatsApp sent',

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ...services.whatsapp_service import send_whatsapp_template
+from ...services.whatsapp_service import send_whatsapp_template, normalize_phone_for_meta
 
 if TYPE_CHECKING:
     from ..recoveryagent import RecoveryState
@@ -44,8 +44,8 @@ async def send_whatsapp_message(state: "RecoveryState") -> dict:
         print(f"[whatsapp] no company_phone for invoice {invoice.get('invoice_id')}")
         return {"whatsapp_sid": ""}
 
-    # Strip any "whatsapp:" prefix; Meta expects a bare E.164 number without "+"
-    to_number = customer_phone.removeprefix("whatsapp:").lstrip("+")
+    # Normalize phone: ensures 91 country code is included for Meta
+    to_number = normalize_phone_for_meta(customer_phone)
 
     # ── Build template parameters ─────────────────────────────────────────────
     # Template body: {{1}} company_name, {{2}} invoice_name, {{3}} amount

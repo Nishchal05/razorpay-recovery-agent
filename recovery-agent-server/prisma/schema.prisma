@@ -112,10 +112,16 @@ model Invoice {
   payment_link          String?
   payment_link_id       String?
 
+  recovery_status       String?       @default("PENDING")
+  promised_date         DateTime?
+  human_intervention_reason String?
+  customer_statement    String?
+
   company_id            Int
   company               Company       @relation(fields: [company_id], references: [company_id], onDelete: Cascade)
 
   messages              Message[]
+  calls                 CallLog[]
 
   created_at            DateTime      @default(now())
   updated_at            DateTime      @updatedAt
@@ -143,6 +149,32 @@ model Message {
   invoice      Invoice   @relation(fields: [invoice_id], references: [invoice_id], onDelete: Cascade)
 
   created_at    DateTime  @default(now())
+
+  @@index([invoice_id])
+}
+
+
+// -------------------------
+// CALL LOG (VOICE RECOVERY)
+// -------------------------
+
+model CallLog {
+  id                 Int       @id @default(autoincrement())
+  invoice_id         Int
+  invoice            Invoice   @relation(fields: [invoice_id], references: [invoice_id], onDelete: Cascade)
+  company_id         Int?
+  channel            String    @default("VOICE")
+  provider           String    @default("ELEVENLABS")
+  call_sid           String?
+  status             String    @default("CALL_INITIATED")
+  transcript         String?
+  summary            String?
+  outcome            String?
+  started_at         DateTime  @default(now())
+  ended_at           DateTime?
+
+  created_at         DateTime  @default(now())
+  updated_at         DateTime  @updatedAt
 
   @@index([invoice_id])
 }

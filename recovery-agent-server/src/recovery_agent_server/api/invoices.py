@@ -150,3 +150,53 @@ async def get_invoice(invoice_id: int, current_business=Depends(get_optional_bus
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to fetch invoice: {str(e)}",
         )
+
+
+@router.patch("/invoices/{invoice_id}")
+async def update_invoice(
+    invoice_id: int,
+    request: Request,
+    current_business=Depends(get_optional_business),
+):
+    if not client.is_connected():
+        await client.connect()
+
+    try:
+        data = await request.json()
+        where = {"invoice_id": invoice_id}
+        if current_business:
+            where["company"] = {"business_id": current_business.id}
+
+        existing = await client.invoice.find_first(where=where)
+        if not existing:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Invoice not found",
+            )
+
+        update_data = {}
+        if "invoice_amount_status" in data:
+            update_data["invoice_amount_status"] = bool(data["invoice_amount_status"])
+            if data["invoice_amount_status"]:
+                update_data["invoice_status"] = "PAID"
+                update_data["recovery_status"] = "RESOLVED"
+
+        if "invoice_status" in data:
+            update_data["invoice_status"] = data["invoice_status"]
+
+        if "recovery_status" in data:
+            update_data["recovery_status"] = data["recovery_status"]
+
+        updated = await client.invoice.update(
+            where={"invoice_id": invoice_id},
+            data=update_data,
+            include={"company": True},
+        )
+        return updated
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update invoice: {str(e)}",
+        )

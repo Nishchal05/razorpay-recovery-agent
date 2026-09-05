@@ -1,16 +1,17 @@
 'use client';
 
-import { use } from 'react';
+import { use, useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getInvoices } from '../../../../lib/api/invoices';
 import { getCompanies } from '../../../../lib/api/companies';
 import { fetchClient } from '../../../../lib/api/client';
-import { Invoice } from '../../../../lib/types';
+import { initiateVoiceCall, getInvoiceCalls, sendWhatsAppReminder, sendEmailReminder, VoiceCallResponse } from '../../../../lib/api/recovery';
+import { Invoice, CallLog } from '../../../../lib/types';
 import { Skeleton } from '../../../../components/ui/Skeleton';
 import { ActivityTimeline } from '../../../../components/dashboard/ActivityTimeline';
 import { ActivityEvent, ActivityType } from '../../../../lib/types';
+import { VoiceCallModal } from '../../../../components/recovery/VoiceCallModal';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useToast } from '../../../../components/ui/Toast';
 import { Spinner } from '../../../../components/ui/Spinner';
 import {
@@ -27,6 +28,9 @@ import {
   Hash,
   IndianRupee,
   ExternalLink,
+  PhoneCall,
+  Bot,
+  ShieldAlert,
 } from 'lucide-react';
 
 function StatusBadge({ invoice }: { invoice: Invoice }) {
@@ -34,6 +38,18 @@ function StatusBadge({ invoice }: { invoice: Invoice }) {
     return (
       <span className="inline-flex items-center gap-1.5 text-sm px-3 py-1 rounded-full border bg-emerald-500/10 text-emerald-400 border-emerald-500/20 font-semibold">
         <CheckCircle2 className="w-3.5 h-3.5" /> Paid
+      </span>
+    );
+  if (invoice.recovery_status === 'NEEDS_HUMAN_INTERVENTION')
+    return (
+      <span className="inline-flex items-center gap-1.5 text-sm px-3 py-1 rounded-full border bg-rose-500/10 text-rose-400 border-rose-500/20 font-semibold">
+        <ShieldAlert className="w-3.5 h-3.5" /> Needs Human Review
+      </span>
+    );
+  if (invoice.recovery_status === 'PROMISE_TO_PAY')
+    return (
+      <span className="inline-flex items-center gap-1.5 text-sm px-3 py-1 rounded-full border bg-amber-500/10 text-amber-300 border-amber-500/20 font-semibold">
+        <Clock className="w-3.5 h-3.5" /> Promise on File
       </span>
     );
   if (invoice.invoice_status === 'DISPUTE')
@@ -61,7 +77,6 @@ function deriveInvoiceActivity(invoice: Invoice, companyName: string): ActivityE
   const due = new Date(invoice.invoice_due_date);
   const isOverdue = !invoice.invoice_amount_status && due < now;
   const daysOverdue = Math.floor((now.getTime() - due.getTime()) / 86400000);
-  const ch = 'WHATSAPP'; // Default, would come from company in real scenario
 
   if (invoice.invoice_amount_status) {
     events.push({
@@ -123,7 +138,6 @@ function deriveInvoiceActivity(invoice: Invoice, companyName: string): ActivityE
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const invoiceId = Number(id);
-  const router = useRouter();
   const { toast } = useToast();
   const qc = useQueryClient();
 
@@ -132,6 +146,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
   const invoice = invoices.find((i: Invoice) => i.invoice_id === invoiceId);
   const company = invoice ? companies.find((c) => c.company_id === invoice.company_id) : null;
+
+  const [voiceModalOpen, setVoiceModalOpen] = useState(false);
+  const [callData, setCallData] = useState<VoiceCallResponse | null>(null);
+
+  const { data: callLogs = [], refetch: refetchCalls } = useQuery({
+    queryKey: ['invoiceCalls', invoiceId],
+    queryFn: () => getInvoiceCalls(invoiceId),
+    enabled: !!invoiceId,
+  });
 
   const { mutate: markPaid, isPending: markingPaid } = useMutation({
     mutationFn: () =>
@@ -146,9 +169,60 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     onError: () => toast('Failed to mark as paid. Please try again.', 'error'),
   });
 
+  const callJeaMutation = useMutation({
+    mutationFn: () => initiateVoiceCall(invoiceId),
+    onSuccess: (data) => {
+      setCallData(data);
+      setVoiceModalOpen(true);
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+      refetchCalls();
+    },
+    onError: (err: Error) => {
+      toast(err.message || 'Failed to connect with JEA voice agent.', 'error');
+    },
+  });
+
+  const sendWhatsAppMutation = useMutation({
+    mutationFn: () => sendWhatsAppReminder(invoiceId),
+    onSuccess: (res) => {
+      toast(res.message || 'WhatsApp reminder sent successfully!', 'success');
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: (err: Error) => {
+      toast(err.message || 'Failed to send WhatsApp reminder.', 'error');
+    },
+  });
+
+  const sendEmailMutation = useMutation({
+    mutationFn: () => sendEmailReminder(invoiceId),
+    onSuccess: (res) => {
+      toast(res.message || 'Email reminder sent successfully!', 'success');
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: (err: Error) => {
+      toast(err.message || 'Failed to send email reminder.', 'error');
+    },
+  });
+
   const handleGeneratePaymentLink = () => {
     toast('Payment link generation coming soon. Connect Razorpay in Integrations.', 'info');
   };
+
+  const companyName = company?.company_name ?? (invoice ? `#${invoice.company_id}` : '');
+
+  const { isOverdue, daysOverdue } = useMemo(() => {
+    if (!invoice) return { isOverdue: false, daysOverdue: 0 };
+    const due = new Date(invoice.invoice_due_date);
+    const now = new Date();
+    const overdue = !invoice.invoice_amount_status && due < now;
+    const days = Math.floor((now.getTime() - due.getTime()) / 86400000);
+    return { isOverdue: overdue, daysOverdue: days };
+  }, [invoice]);
+
+  const activity = useMemo(
+    () => (invoice ? deriveInvoiceActivity(invoice, companyName) : []),
+    [invoice, companyName]
+  );
 
   if (isLoading)
     return (
@@ -169,11 +243,6 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       </div>
     );
 
-  const isOverdue = !invoice.invoice_amount_status && new Date(invoice.invoice_due_date) < new Date();
-  const daysOverdue = Math.floor((Date.now() - new Date(invoice.invoice_due_date).getTime()) / 86400000);
-  const companyName = company?.company_name ?? `#${invoice.company_id}`;
-  const activity = deriveInvoiceActivity(invoice, companyName);
-
   const channelIcon =
     company?.preferred_channel === 'WHATSAPP' ? (
       <MessageCircle className="w-4 h-4 text-green-400" />
@@ -192,6 +261,43 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <ArrowLeft className="w-4 h-4" /> Back to Invoices
       </Link>
 
+      {/* Recovery Status Alerts */}
+      {invoice.recovery_status === 'PROMISE_TO_PAY' && (
+        <div className="mb-6 p-4 rounded-2xl bg-amber-500/10 border border-amber-500/25 flex items-start gap-3">
+          <Clock className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <div className="text-amber-300 font-bold text-sm">
+              Promise to Pay Confirmed
+            </div>
+            <p className="text-zinc-400 text-xs mt-0.5">
+              Customer confirmed payment by{' '}
+              <strong className="text-amber-300">
+                {invoice.promised_date
+                  ? new Date(invoice.promised_date).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })
+                  : 'promised date'}
+              </strong>
+              {invoice.customer_statement && ` — "${invoice.customer_statement}"`}.
+              Automated reminders are currently paused.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {invoice.recovery_status === 'NEEDS_HUMAN_INTERVENTION' && (
+        <div className="mb-6 p-4 rounded-2xl bg-rose-500/10 border border-rose-500/25 flex items-start gap-3">
+          <ShieldAlert className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+          <div>
+            <div className="text-rose-300 font-bold text-sm">
+              Human Intervention Required ({invoice.human_intervention_reason || 'Escalated'})
+            </div>
+            <p className="text-zinc-400 text-xs mt-0.5">
+              Automated communication has been stopped so a team member can review this case.
+              {invoice.customer_statement && ` Customer noted: "${invoice.customer_statement}"`}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Invoice header */}
       <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-6 mb-6">
         <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-6">
@@ -208,7 +314,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             )}
           </div>
 
-          {/* Actions */}
+          {/* Payment Link & Mark as Paid */}
           {!invoice.invoice_amount_status && (
             <div className="flex flex-wrap gap-3 shrink-0">
               {invoice.payment_link ? (
@@ -241,6 +347,48 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </div>
           )}
         </div>
+
+        {/* RECOVERY ACTIONS PANEL */}
+        {!invoice.invoice_amount_status && (
+          <div className="mt-6 pt-6 border-t border-white/8">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-zinc-400 text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5">
+                <Bot className="w-3.5 h-3.5 text-indigo-400" />
+                Recovery Actions
+              </div>
+              <span className="text-[11px] text-zinc-500">Dispatch reminders contextually</span>
+            </div>
+
+            <div className="flex flex-wrap gap-3">
+              <button
+                onClick={() => sendWhatsAppMutation.mutate()}
+                disabled={sendWhatsAppMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-green-500/30 bg-green-500/10 hover:bg-green-500/20 text-green-300 text-sm font-semibold transition-all shadow-[0_0_15px_rgba(34,197,94,0.12)] disabled:opacity-50"
+              >
+                {sendWhatsAppMutation.isPending ? <Spinner size="sm" /> : <MessageCircle className="w-4 h-4" />}
+                Send WhatsApp
+              </button>
+
+              <button
+                onClick={() => sendEmailMutation.mutate()}
+                disabled={sendEmailMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 rounded-xl border border-blue-500/30 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 text-sm font-semibold transition-all shadow-[0_0_15px_rgba(59,130,246,0.12)] disabled:opacity-50"
+              >
+                {sendEmailMutation.isPending ? <Spinner size="sm" /> : <Mail className="w-4 h-4" />}
+                Send Email
+              </button>
+
+              <button
+                onClick={() => callJeaMutation.mutate()}
+                disabled={callJeaMutation.isPending}
+                className="flex items-center gap-2 px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 hover:opacity-90 text-white text-sm font-bold transition-all shadow-[0_0_20px_rgba(99,102,241,0.35)] disabled:opacity-50"
+              >
+                {callJeaMutation.isPending ? <Spinner size="sm" /> : <PhoneCall className="w-4 h-4" />}
+                Call with JEA
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Metadata grid */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 pt-6 border-t border-white/8">
@@ -361,8 +509,56 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </div>
             </div>
           )}
+
+          {/* Voice Call History */}
+          <div className="rounded-2xl border border-white/8 bg-white/[0.02] overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
+              <div className="flex items-center gap-2">
+                <PhoneCall className="w-4 h-4 text-indigo-400" />
+                <span className="text-white font-semibold text-sm">Voice Call Logs (JEA)</span>
+              </div>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-white/5 text-zinc-400 font-semibold">
+                {callLogs.length}
+              </span>
+            </div>
+            <div className="p-4 space-y-2.5">
+              {callLogs.length === 0 ? (
+                <p className="text-zinc-500 text-xs text-center py-4">No voice calls recorded yet.</p>
+              ) : (
+                callLogs.slice(0, 5).map((call: CallLog) => (
+                  <div key={call.id} className="p-3 rounded-xl bg-white/[0.02] border border-white/5 space-y-1">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-indigo-300 font-medium">{call.status}</span>
+                      <span className="text-zinc-500 text-[10px]">
+                        {call.created_at ? new Date(call.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
+                      </span>
+                    </div>
+                    {call.summary && <p className="text-zinc-400 text-xs leading-relaxed">{call.summary}</p>}
+                    {call.outcome && (
+                      <span className="inline-block text-[10px] px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-semibold">
+                        {call.outcome}
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
         </div>
       </div>
+
+      {/* Voice Call Interactive Modal */}
+      <VoiceCallModal
+        isOpen={voiceModalOpen}
+        onClose={() => setVoiceModalOpen(false)}
+        callData={callData}
+        isLoading={callJeaMutation.isPending}
+        onCallEnded={() => {
+          setVoiceModalOpen(false);
+          qc.invalidateQueries({ queryKey: ['invoices'] });
+          refetchCalls();
+        }}
+      />
     </div>
   );
 }
