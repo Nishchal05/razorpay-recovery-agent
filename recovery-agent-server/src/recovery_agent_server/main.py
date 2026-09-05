@@ -29,6 +29,18 @@ async def startup():
         await db_client.connect()
         
     scheduler.add_job(check_overdue_invoices, 'interval', hours=1)
+    
+    # Check for incoming customer email replies every 2 minutes
+    async def _safe_sync_emails():
+        try:
+            from .api.recovery import sync_incoming_emails
+            from .services.gmail_service import is_authenticated
+            if is_authenticated():
+                await sync_incoming_emails()
+        except Exception as e:
+            print(f"[scheduler/email_sync] {e}")
+
+    scheduler.add_job(_safe_sync_emails, 'interval', minutes=2)
     scheduler.start()
 
 @app.on_event("shutdown")

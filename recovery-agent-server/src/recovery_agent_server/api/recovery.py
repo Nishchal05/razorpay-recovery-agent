@@ -17,11 +17,12 @@ Provides endpoints for:
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Request, Depends, status, Header
+from fastapi import APIRouter, HTTPException, Request, Depends, status, Header, Query, Response, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from ..database.prisma import client as db
@@ -32,8 +33,22 @@ from ..services.elevenlabs_service import (
     verify_webhook_signature,
     is_configured as is_elevenlabs_configured,
 )
-from ..services.whatsapp_service import send_invoice_whatsapp, is_configured as is_whatsapp_configured
-from ..services.gmail_service import send_email, is_authenticated as is_gmail_authenticated
+from ..services.whatsapp_service import (
+    send_invoice_whatsapp,
+    send_whatsapp_text,
+    is_configured as is_whatsapp_configured,
+)
+from ..services.gmail_service import (
+    send_email,
+    fetch_unread_replies,
+    mark_message_processed,
+    is_authenticated as is_gmail_authenticated,
+)
+from ..services.inbound_service import (
+    process_inbound_message,
+    resolve_invoice_by_phone,
+    resolve_invoice_by_email,
+)
 
 router = APIRouter(prefix="/api/recovery", tags=["Recovery & Voice Agent"])
 
@@ -482,3 +497,215 @@ async def elevenlabs_webhook(
             )
 
     return {"status": "success"}
+
+
+# ============================================================
+# 6. INBOUND WHATSAPP WEBHOOK (META CLOUD API)
+# ============================================================
+
+@router.get("/webhooks/whatsapp")
+async def verify_whatsapp_webhook(
+    hub_mode: Optional[str] = Query(None, alias="hub.mode"),
+    hub_challenge: Optional[str] = Query(None, alias="hub.challenge"),
+    hub_verify_token: Optional[str] = Query(None, alias="hub.verify_token"),
+):
+    """
+    Verification endpoint required by Meta WhatsApp Cloud API.
+    Verifies that webhook requests originate from Meta.
+    """
+    expected_token = os.environ.get("META_VERIFY_TOKEN", "recovery_agent_secret_token").strip()
+    if hub_mode == "subscribe" and hub_verify_token == expected_token:
+        print("[whatsapp_webhook] Webhook successfully verified with Meta!")
+        return Response(content=str(hub_challenge), media_type="text/plain")
+
+    raise HTTPException(status_code=403, detail="Verification token mismatch")
+
+
+async def _process_whatsapp_message_async(from_phone: str, text_body: str):
+    """Asynchronous background worker to process inbound message and send reply."""
+    try:
+        invoice = await resolve_invoice_by_phone(from_phone)
+        if not invoice:
+            # Fallback to most recent non-paid invoice in the system for testing
+            if not db.is_connected():
+                await db.connect()
+            invoice = await db.invoice.find_first(
+                where={"invoice_status": {"not": "PAID"}},
+                order={"created_at": "desc"},
+                include={"company": True},
+            )
+
+        if invoice:
+            result = await process_inbound_message(
+                incoming_text=text_body,
+                invoice=invoice,
+                channel="WHATSAPP",
+            )
+            reply_text = result.get("reply_text")
+            if reply_text and is_whatsapp_configured():
+                await send_whatsapp_text(to_number=from_phone, message_text=reply_text)
+                print(f"[whatsapp_webhook] Successfully dispatched reply to {from_phone}")
+        else:
+            fallback_reply = (
+                "Hello! We received your message. We could not locate an active invoice for your account. "
+                "Please reply with your Invoice Number (e.g. inv123) so we can assist you."
+            )
+            if is_whatsapp_configured():
+                await send_whatsapp_text(to_number=from_phone, message_text=fallback_reply)
+                print(f"[whatsapp_webhook] Sent fallback reply to {from_phone}")
+    except Exception as err:
+        print(f"[whatsapp_webhook] Error processing background WhatsApp message: {err}")
+
+
+@router.post("/webhooks/whatsapp")
+async def receive_whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Receive incoming WhatsApp messages from customers.
+    Immediately returns 200 OK to Meta and processes intent asynchronously.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        return {"status": "ignored"}
+
+    entries = payload.get("entry", [])
+    for entry in entries:
+        changes = entry.get("changes", [])
+        for change in changes:
+            val = change.get("value", {})
+            messages = val.get("messages", [])
+            for msg in messages:
+                msg_type = msg.get("type")
+                from_phone = msg.get("from", "")
+                
+                if msg_type == "text" and from_phone:
+                    text_body = msg.get("text", {}).get("body", "").strip()
+                    print(f"[whatsapp_webhook] Inbound message from {from_phone}: '{text_body}'")
+                    background_tasks.add_task(_process_whatsapp_message_async, from_phone, text_body)
+
+    return {"status": "success"}
+
+
+# ============================================================
+# 7. INBOUND EMAIL SYNC & PROCESSING (GMAIL)
+# ============================================================
+
+async def do_sync_incoming_emails() -> list:
+    """Core function to check unread emails, classify intent, and reply."""
+    if not is_gmail_authenticated():
+        return []
+
+    unread_emails = fetch_unread_replies(max_results=5)
+    print(f"[sync-emails] Found {len(unread_emails)} unread email(s)")
+
+    results = []
+    for email in unread_emails:
+        from_email = email.get("from_email", "")
+        subject = email.get("subject", "")
+        body = email.get("body", "")
+
+        # Find invoice by email or reference in text
+        invoice = await resolve_invoice_by_email(from_email, text_context=f"{subject} {body}")
+        if not invoice:
+            mark_message_processed(email.get("message_id"))
+            results.append({
+                "email": from_email,
+                "status": "SKIPPED_NO_INVOICE",
+                "subject": subject,
+            })
+            continue
+
+        # Process through AI pipeline
+        proc_result = await process_inbound_message(
+            incoming_text=body,
+            invoice=invoice,
+            channel="EMAIL",
+        )
+        reply_text = proc_result.get("reply_text")
+
+        # Reply to customer email
+        reply_subject = f"Re: {subject}" if not subject.lower().startswith("re:") else subject
+        try:
+            send_email(
+                to=from_email,
+                subject=reply_subject,
+                body_text=reply_text,
+                thread_id=email.get("thread_id"),
+                in_reply_to=email.get("message_id"),
+            )
+            proc_result["email_sent"] = True
+            mark_message_processed(email.get("message_id"))
+            print(f"[sync-emails] Successfully sent reply email to {from_email} (Thread: {email.get('thread_id')})")
+        except Exception as send_err:
+            print(f"[sync-emails] Error sending reply email to {from_email}: {send_err}")
+            proc_result["email_sent"] = False
+
+        results.append(proc_result)
+
+    return results
+
+
+@router.post("/sync-emails")
+async def sync_incoming_emails():
+    """
+    Check Gmail inbox for unread customer replies to recovery reminder emails.
+    Processes intents (queries, promises, paid verifications, disputes) and sends replies.
+    """
+    if not is_gmail_authenticated():
+        raise HTTPException(
+            status_code=400,
+            detail="Gmail is not authorized. Visit /auth/gmail to connect your account."
+        )
+
+    results = await do_sync_incoming_emails()
+    return {
+        "status": "success",
+        "processed_count": len(results),
+        "results": results,
+    }
+
+    return {
+        "status": "success",
+        "processed_count": len(results),
+        "results": results,
+    }
+
+
+# ============================================================
+# 8. SIMULATE INBOUND MESSAGE (DEV & AUTOMATED TESTING)
+# ============================================================
+
+class SimulateInboundRequest(BaseModel):
+    invoice_id: int = Field(..., description="ID of the invoice to simulate reply for")
+    message: str = Field(..., description="Customer message text")
+    channel: Literal["WHATSAPP", "EMAIL"] = Field(default="WHATSAPP", description="Channel simulating reply from")
+
+
+@router.post("/inbound/simulate")
+async def simulate_inbound_message(req: SimulateInboundRequest):
+    """
+    Simulate an incoming customer reply for testing.
+    Runs intent classification, Razorpay verification, and DB state updates.
+    """
+    if not db.is_connected():
+        await db.connect()
+
+    invoice = await db.invoice.find_unique(
+        where={"invoice_id": req.invoice_id},
+        include={"company": True}
+    )
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    result = await process_inbound_message(
+        incoming_text=req.message,
+        invoice=invoice,
+        channel=req.channel,
+    )
+
+    return {
+        "success": True,
+        "input_message": req.message,
+        "channel": req.channel,
+        "pipeline_result": result,
+    }
