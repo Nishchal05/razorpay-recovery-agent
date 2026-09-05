@@ -246,9 +246,9 @@ export function InvoiceForm({ onSuccess }: InvoiceFormProps) {
         <div className="space-y-1.5">
           <Label htmlFor="invoice_status" className="text-zinc-300 text-sm font-medium">Status</Label>
           <select id="invoice_status" {...register('invoice_status')} className={selectClass}>
-            <option value="PENDING">Pending</option>
-            <option value="PAID">Paid</option>
-            <option value="DISPUTE">Dispute</option>
+            <option value="PENDING" className="bg-[#0f1117] text-white">Pending</option>
+            <option value="PAID" className="bg-[#0f1117] text-white">Paid</option>
+            <option value="DISPUTE" className="bg-[#0f1117] text-white">Dispute</option>
           </select>
           {errors.invoice_status && <p className="text-xs text-red-400 mt-1">{errors.invoice_status.message}</p>}
         </div>

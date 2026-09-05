@@ -48,9 +48,27 @@ const CHANNELS = [
 ] as const;
 
 const colorMap = {
-  green:  { ring: 'ring-green-500/60',  border: 'border-green-500/40',  bg: 'bg-green-500/10',  text: 'text-green-400',  dot: 'bg-green-400' },
-  blue:   { ring: 'ring-blue-500/60',   border: 'border-blue-500/40',   bg: 'bg-blue-500/10',   text: 'text-blue-400',   dot: 'bg-blue-400' },
-  purple: { ring: 'ring-purple-500/60', border: 'border-purple-500/40', bg: 'bg-purple-500/10', text: 'text-purple-400', dot: 'bg-purple-400' },
+  green: {
+    selected: 'bg-[#062c19] border-emerald-500 ring-2 ring-emerald-500/60 shadow-[0_0_20px_rgba(16,185,129,0.25)]',
+    icon: 'text-emerald-400',
+    title: 'text-emerald-200',
+    desc: 'text-emerald-400/80',
+    dot: 'bg-emerald-400',
+  },
+  blue: {
+    selected: 'bg-[#081d3d] border-blue-500 ring-2 ring-blue-500/60 shadow-[0_0_20px_rgba(59,130,246,0.25)]',
+    icon: 'text-blue-400',
+    title: 'text-blue-200',
+    desc: 'text-blue-400/80',
+    dot: 'bg-blue-400',
+  },
+  purple: {
+    selected: 'bg-[#230f3d] border-purple-500 ring-2 ring-purple-500/60 shadow-[0_0_20px_rgba(168,85,247,0.25)]',
+    icon: 'text-purple-400',
+    title: 'text-purple-200',
+    desc: 'text-purple-400/80',
+    dot: 'bg-purple-400',
+  },
 };
 
 const companySchema = z.object({
@@ -134,22 +152,24 @@ export function CompanyForm({ onSuccess }: CompanyFormProps) {
                 key={ch.value}
                 type="button"
                 onClick={() => setValue('preferred_channel', ch.value as CompanyFormValues['preferred_channel'])}
-                className={`relative flex flex-col items-center gap-2 p-3 rounded-xl border text-center transition-all cursor-pointer
-                  ${isSelected
-                    ? `${c.bg} ${c.border} ring-2 ${c.ring}`
-                    : 'bg-zinc-900/40 border-zinc-800 hover:border-zinc-600'
-                  }`}
+                className={`relative flex flex-col items-center gap-2 p-3 rounded-xl border text-center transition-all cursor-pointer ${
+                  isSelected
+                    ? c.selected
+                    : 'bg-[#13151b] border-zinc-800 hover:border-zinc-700 hover:bg-[#171a22]'
+                }`}
               >
                 {isSelected && (
-                  <div className={`absolute top-2 right-2 w-2 h-2 rounded-full ${c.dot} shadow-[0_0_6px_rgba(0,0,0,0.5)]`} />
+                  <div className={`absolute top-2 right-2 w-2 h-2 rounded-full ${c.dot} shadow-[0_0_8px_rgba(0,0,0,0.6)]`} />
                 )}
-                <span className={isSelected ? c.text : 'text-zinc-500'}>
+                <span className={isSelected ? c.icon : 'text-zinc-400'}>
                   {ch.icon}
                 </span>
-                <span className={`text-xs font-semibold leading-tight ${isSelected ? 'text-white' : 'text-zinc-400'}`}>
+                <span className={`text-xs font-semibold leading-tight ${isSelected ? c.title : 'text-zinc-200'}`}>
                   {ch.label}
                 </span>
-                <span className="text-[10px] text-zinc-600 leading-tight hidden sm:block">{ch.desc}</span>
+                <span className={`text-[10px] leading-tight hidden sm:block ${isSelected ? c.desc : 'text-zinc-500'}`}>
+                  {ch.desc}
+                </span>
               </button>
             );
           })}

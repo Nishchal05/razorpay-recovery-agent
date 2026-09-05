@@ -53,16 +53,45 @@ function CreateCustomerForm({ onSuccess }: { onSuccess: (c: Company) => void }) 
       {field('company_phone', 'Phone', 'tel', '+91 98765 43210')}
       {field('company_address', 'Address', 'text', '123 MG Road, Bangalore')}
       <div>
-        <label className="block text-zinc-400 text-xs font-medium mb-1">Preferred Recovery Channel</label>
-        <select
-          value={form.preferred_channel}
-          onChange={(e) => setForm(p => ({ ...p, preferred_channel: e.target.value as typeof form.preferred_channel }))}
-          className="w-full px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm focus:outline-none focus:border-indigo-500/50 transition-all"
-        >
-          <option value="WHATSAPP">WhatsApp</option>
-          <option value="EMAIL">Email</option>
-          <option value="VOICE_CALL">Voice Call</option>
-        </select>
+        <label className="block text-zinc-400 text-xs font-medium mb-1.5">Preferred Recovery Channel</label>
+        <div className="grid grid-cols-3 gap-2">
+          <button
+            type="button"
+            onClick={() => setForm(p => ({ ...p, preferred_channel: 'WHATSAPP' }))}
+            className={`flex flex-col items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+              form.preferred_channel === 'WHATSAPP'
+                ? 'bg-green-500/20 border-green-500/50 text-green-300 ring-2 ring-green-500/30'
+                : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <MessageCircle className="w-4 h-4 text-green-400" />
+            <span>WhatsApp</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setForm(p => ({ ...p, preferred_channel: 'EMAIL' }))}
+            className={`flex flex-col items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+              form.preferred_channel === 'EMAIL'
+                ? 'bg-blue-500/20 border-blue-500/50 text-blue-300 ring-2 ring-blue-500/30'
+                : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <Mail className="w-4 h-4 text-blue-400" />
+            <span>Email</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setForm(p => ({ ...p, preferred_channel: 'VOICE_CALL' }))}
+            className={`flex flex-col items-center justify-center gap-1.5 py-2.5 px-2 rounded-xl border text-xs font-semibold transition-all cursor-pointer ${
+              form.preferred_channel === 'VOICE_CALL'
+                ? 'bg-amber-500/20 border-amber-500/50 text-amber-300 ring-2 ring-amber-500/30'
+                : 'bg-zinc-900/60 border-zinc-800 text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
+            }`}
+          >
+            <Phone className="w-4 h-4 text-amber-400" />
+            <span>Voice Call</span>
+          </button>
+        </div>
       </div>
       {error && <p className="text-rose-400 text-xs">{error}</p>}
       <button

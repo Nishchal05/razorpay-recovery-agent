@@ -44,3 +44,11 @@ export const sendEmailReminder = (invoiceId: number): Promise<{ success: boolean
     body: JSON.stringify({ invoice_id: invoiceId }),
   });
 };
+
+export const generateInvoicePaymentLink = (
+  invoiceId: number
+): Promise<{ success: boolean; payment_link: string; payment_link_id: string; reused: boolean }> => {
+  return fetchClient(`/api/recovery/invoices/${invoiceId}/payment-link`, {
+    method: 'POST',
+  });
+};

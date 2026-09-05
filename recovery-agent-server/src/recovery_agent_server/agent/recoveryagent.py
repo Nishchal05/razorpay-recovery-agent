@@ -192,10 +192,10 @@ RULES (these are guidance — the calling code enforces the hard caps):
 
 DECISION RULES:
 
-- send_message = true only when an automated WhatsApp message is
-  appropriate.
-- create_payment_link = true only when a payment link should be
-  provided to the customer.
+- send_message = true when an automated reminder via the customer's
+  preferred communication channel (WhatsApp, Email, or Voice) is appropriate.
+- create_payment_link = true when a Razorpay payment link should be
+  generated for this invoice.
 - human_intervention = true when the situation requires human review.
 - If human_intervention is true, do not recommend automation.
 - message_type must reflect which of the four categories best fits,
@@ -461,7 +461,10 @@ async def create_payment_link(state: RecoveryState):
         print(f"[create_payment_link] failed: {exc}")
         payment_link = ""
 
-    return {"payment_link": payment_link}
+    if isinstance(invoice, dict) and payment_link:
+        invoice["payment_link"] = payment_link
+
+    return {"payment_link": payment_link, "invoice": invoice}
 
 
 # ============================================================
@@ -520,7 +523,7 @@ def route_decision(state: RecoveryState):
     if state.get("human_intervention"):
         return "human_review"
 
-    if state.get("create_payment_link") and state.get("send_message"):
+    if state.get("create_payment_link") and not state.get("payment_link") and not state.get("invoice", {}).get("payment_link"):
         return "create_payment_link"
 
     if state.get("send_message"):
@@ -571,6 +574,8 @@ graph.add_conditional_edges(
 
 # After creating a payment link, send via whichever channel was requested.
 def route_after_payment_link(state: RecoveryState):
+    if not state.get("send_message"):
+        return END
     channel = _resolve_channel(state)
     print(f"[router/payment_link] preferred_channel resolved to '{channel}'")
     if channel == "email":
@@ -586,6 +591,7 @@ graph.add_conditional_edges(
         "send_whatsapp_message": "send_whatsapp_message",
         "send_email_message": "send_email_message",
         "call_voice_agent": "call_voice_agent",
+        END: END,
     },
 )
 

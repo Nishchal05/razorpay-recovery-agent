@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getInvoices } from '../../../../lib/api/invoices';
 import { getCompanies } from '../../../../lib/api/companies';
 import { fetchClient } from '../../../../lib/api/client';
-import { initiateVoiceCall, getInvoiceCalls, sendWhatsAppReminder, sendEmailReminder, VoiceCallResponse } from '../../../../lib/api/recovery';
+import { initiateVoiceCall, getInvoiceCalls, sendWhatsAppReminder, sendEmailReminder, generateInvoicePaymentLink, VoiceCallResponse } from '../../../../lib/api/recovery';
 import { Invoice, CallLog } from '../../../../lib/types';
 import { Skeleton } from '../../../../components/ui/Skeleton';
 import { ActivityTimeline } from '../../../../components/dashboard/ActivityTimeline';
@@ -204,8 +204,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     },
   });
 
+  const generateLinkMutation = useMutation({
+    mutationFn: () => generateInvoicePaymentLink(invoiceId),
+    onSuccess: (data) => {
+      toast(data.reused ? 'Payment link already active!' : 'Payment link generated successfully!', 'success');
+      qc.invalidateQueries({ queryKey: ['invoices'] });
+    },
+    onError: (err: Error) => {
+      toast(err.message || 'Failed to generate payment link.', 'error');
+    },
+  });
+
   const handleGeneratePaymentLink = () => {
-    toast('Payment link generation coming soon. Connect Razorpay in Integrations.', 'info');
+    generateLinkMutation.mutate();
   };
 
   const companyName = company?.company_name ?? (invoice ? `#${invoice.company_id}` : '');
@@ -330,10 +341,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               ) : (
                 <button
                   onClick={handleGeneratePaymentLink}
-                  className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white text-sm font-semibold transition-all"
+                  disabled={generateLinkMutation.isPending}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl border border-white/10 bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-white text-sm font-semibold transition-all disabled:opacity-50 cursor-pointer"
                 >
-                  <CreditCard className="w-4 h-4" />
-                  Generate Payment Link
+                  {generateLinkMutation.isPending ? <Spinner size="sm" /> : <CreditCard className="w-4 h-4" />}
+                  {generateLinkMutation.isPending ? 'Generating…' : 'Generate Payment Link'}
                 </button>
               )}
               <button

@@ -42,6 +42,9 @@ async def call_voice_agent(state: "RecoveryState") -> dict:
     print(f"[voice/JEA] Starting voice recovery for invoice {invoice.get('invoice_id')}")
     print(f"[voice/JEA] Customer: {getattr(companydetail, 'company_name', 'Customer')}")
 
+    if state.get("payment_link") and not invoice.get("payment_link"):
+        invoice["payment_link"] = state.get("payment_link")
+
     # Build dynamic variables for JEA
     dynamic_vars = build_invoice_dynamic_variables(
         invoice=invoice,

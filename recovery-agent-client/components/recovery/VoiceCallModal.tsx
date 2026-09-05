@@ -51,6 +51,8 @@ export function VoiceCallModal({
 
   const callState: CallState = isEnded
     ? 'ENDED'
+    : callData?.elevenlabs_error
+    ? 'FAILED'
     : isLoading || !callData
     ? 'INITIATING'
     : 'CONNECTED';
@@ -229,13 +231,29 @@ export function VoiceCallModal({
           },
         ]);
       } else if (scenario === 'payment_link') {
+        let paymentLink = callData.invoice.payment_link;
+        try {
+          const res = (await fetchClient(
+            `/api/recovery/invoices/${callData.invoice.invoice_id}/payment-link`,
+            { method: 'POST' }
+          )) as { success: boolean; payment_link: string } | null;
+          if (res?.payment_link) {
+            paymentLink = res.payment_link;
+            callData.invoice.payment_link = res.payment_link;
+          }
+        } catch (e) {
+          console.error('Failed to ensure payment link in voice modal', e);
+        }
+
         setConversationItems((prev) => [
           ...prev,
           { id: String(Date.now()), sender: 'customer', text: "Can you send me the payment link?", timestamp: now },
           {
             id: String(Date.now() + 1),
             sender: 'jea',
-            text: "The payment link has already been sent to you through WhatsApp and email. You can use that link to complete the payment securely.",
+            text: paymentLink
+              ? `I've sent the secure Razorpay payment link directly to your WhatsApp and email: ${paymentLink}. You can use it anytime to complete the payment.`
+              : "The payment link has already been sent to you through WhatsApp and email. You can use that link to complete the payment securely.",
             timestamp: now,
           },
         ]);
@@ -321,7 +339,9 @@ export function VoiceCallModal({
         <div className="p-6 text-center border-b border-white/5 bg-gradient-to-b from-transparent to-white/[0.01]">
           {isLoading || callState === 'INITIATING' ? (
             <div className="py-6 flex flex-col items-center">
-              <Spinner size="lg" className="text-indigo-400 mb-3" />
+              <div className="text-indigo-400 mb-3">
+                <Spinner size="lg" />
+              </div>
               <p className="text-white font-semibold text-sm">Initializing voice agent connection...</p>
               <p className="text-zinc-500 text-xs mt-1">Generating signed session credentials securely</p>
             </div>

@@ -50,6 +50,7 @@ from ..services.inbound_service import (
     resolve_invoice_by_email,
 )
 from ..services.razorpay_service import (
+    generate_payment_link,
     fetch_payment_link,
     verify_webhook_signature as verify_razorpay_signature,
 )
@@ -303,6 +304,32 @@ async def initiate_voice_call(
 
     business_name = current_business.business_name if current_business else None
 
+    # If invoice doesn't have a payment link yet, generate and persist one now
+    if not invoice.payment_link:
+        try:
+            company_name = invoice.company.company_name if invoice.company else "Customer"
+            customer_email = invoice.company.company_email if invoice.company else None
+            customer_phone = invoice.company.company_phone if invoice.company else None
+            rzp_res = await generate_payment_link(
+                amount=float(invoice.invoice_amount),
+                description=f"Payment for invoice {invoice.invoice_name}",
+                customer_name=company_name,
+                customer_email=customer_email,
+                customer_phone=customer_phone,
+                invoice_id=invoice.invoice_id,
+                invoice_name=invoice.invoice_name,
+            )
+            plink = rzp_res.get("short_url", "")
+            plink_id = rzp_res.get("payment_link_id", "")
+            if plink:
+                invoice = await db.invoice.update(
+                    where={"invoice_id": invoice.invoice_id},
+                    data={"payment_link": plink, "payment_link_id": plink_id},
+                    include={"company": True}
+                )
+        except Exception as plink_err:
+            print(f"[recovery/voice] Failed to auto-generate payment link: {plink_err}")
+
     # Prepare context for JEA
     dynamic_vars = build_invoice_dynamic_variables(
         invoice=invoice.dict() if hasattr(invoice, "dict") else dict(invoice),
@@ -348,6 +375,64 @@ async def initiate_voice_call(
             "customer_phone": invoice.company.company_phone if invoice.company else "",
             "payment_link": invoice.payment_link,
         }
+    }
+
+
+# ============================================================
+# 3.5 GENERATE INVOICE PAYMENT LINK ON DEMAND
+# ============================================================
+
+@router.post("/invoices/{invoice_id}/payment-link")
+async def generate_invoice_payment_link_endpoint(invoice_id: int):
+    """Generate or retrieve a Razorpay payment link for an existing invoice."""
+    if not db.is_connected():
+        await db.connect()
+
+    invoice = await db.invoice.find_first(
+        where={"invoice_id": invoice_id},
+        include={"company": True}
+    )
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    if invoice.payment_link:
+        return {
+            "success": True,
+            "payment_link": invoice.payment_link,
+            "payment_link_id": invoice.payment_link_id,
+            "invoice": invoice,
+            "reused": True,
+        }
+
+    company_name = invoice.company.company_name if invoice.company else "Customer"
+    customer_email = invoice.company.company_email if invoice.company else None
+    customer_phone = invoice.company.company_phone if invoice.company else None
+
+    rzp_res = await generate_payment_link(
+        amount=float(invoice.invoice_amount),
+        description=f"Payment for invoice {invoice.invoice_name}",
+        customer_name=company_name,
+        customer_email=customer_email,
+        customer_phone=customer_phone,
+        invoice_id=invoice.invoice_id,
+        invoice_name=invoice.invoice_name,
+    )
+
+    plink = rzp_res.get("short_url", "")
+    plink_id = rzp_res.get("payment_link_id", "")
+
+    updated_inv = await db.invoice.update(
+        where={"invoice_id": invoice.invoice_id},
+        data={"payment_link": plink, "payment_link_id": plink_id},
+        include={"company": True}
+    )
+
+    return {
+        "success": True,
+        "payment_link": plink,
+        "payment_link_id": plink_id,
+        "invoice": updated_inv,
+        "reused": False,
     }
 
 

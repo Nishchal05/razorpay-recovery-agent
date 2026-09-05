@@ -92,6 +92,7 @@ def build_invoice_dynamic_variables(
         "currency": "INR",
         "due_date": inv_due_date,
         "customer_phone": customer_phone,
+        "payment_link": invoice.get("payment_link") or "",
     }
 
 
