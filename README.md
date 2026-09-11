@@ -71,10 +71,10 @@ and critical business rules remain under backend control.
 
 **Place the generated architecture image here:**
 
-`docs/recovery-agent-flow.png`
+`c:\Users\nishc\Downloads\B2B Agent Outbound workflow.png`
 
 ![AI Receivables Recovery Agent - End-to-End
-Flow](docs/recovery-agent-flow.png)
+Flow](c:\Users\nishc\Downloads\B2B Agent Outbound workflow.png)
 
 ### High-level flow
 
