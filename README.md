@@ -68,16 +68,13 @@ and critical business rules remain under backend control.
 # 🏗️ System Architecture
 
 ## End-to-End Recovery Flow
-
-**Place the generated architecture image here:**
-
 ![AI Receivables Recovery Agent - End-to-End
-Flow](Images/B2B Agent Outbound workflow.png)
+Flow](Images/B2B_Agent_Outbound_workflow.png)
 
 ### High-level flow
 
 ``` text
-                 ┌──────────────────────┐
+                 ┌──────────────────────┐ 
                  │     TRIGGER LAYER    │
                  │                      │
                  │ Cron                 │
